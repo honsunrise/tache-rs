@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "tache",
+    "tuntap",
+]
+
+[profile.release]
+lto = true
+debug = 1
+incremental = false
