@@ -45,12 +45,12 @@ impl Engine {
         Engine {
             modes,
             inbounds: vec![],
-            outbounds: vec![]
+            outbounds: vec![],
         }
     }
 
     pub fn get_modes(&self) -> Vec<&str> {
-        self.modes.keys().map(|key|key.as_ref()).collect()
+        self.modes.keys().map(|key| key.as_ref()).collect()
     }
 
     pub fn update_config(config: &Config) -> Result<(), &'static str> {
@@ -61,13 +61,13 @@ impl Engine {
 
     pub fn run(&self) {
         for inbound in self.inbounds.iter() {
-            let inbound  = inbound.clone();
+            let inbound = inbound.clone();
             task::spawn(async move {
                 loop {
                     let mut socket = match inbound.listen() {
                         Ok((_, socket)) => socket,
                         Err(e) => {
-                            return
+                            return;
                         }
                     };
 
