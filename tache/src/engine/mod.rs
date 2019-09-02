@@ -32,7 +32,7 @@ pub struct OutboundWarp {
 }
 
 pub struct Engine {
-    inbounds: Vec<Arc<dyn Inbound>>,
+    inbounds: Vec<Arc<dyn Inbound + Send + Sync>>,
     outbounds: Vec<Box<dyn Outbound>>,
     modes: HashMap<Box<str>, MODE>,
 }
@@ -59,11 +59,17 @@ impl Engine {
 
     pub fn lookup(&self) {}
 
-    pub async fn run(&self) {
+    pub fn run(&self) {
         for inbound in self.inbounds.iter() {
+            let inbound  = inbound.clone();
             task::spawn(async move {
                 loop {
-                    let Ok((_, mut socket)) = inbound.listen();
+                    let mut socket = match inbound.listen() {
+                        Ok((_, socket)) => socket,
+                        Err(e) => {
+                            return
+                        }
+                    };
 
                     task::spawn(async move {
                         let mut buf = [0; 1024];

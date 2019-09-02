@@ -97,7 +97,7 @@ async fn run(config: Config) {
     // start engine
     let engine_config = engine::Config{modes: "global"};
     let engine = Engine::new(&engine_config);
-    engine.run().await;
+    engine.run();
     // stop script
 }
 
