@@ -95,8 +95,8 @@ impl Engine {
     pub fn lookup(&self) {}
 
     async fn run_rule(stream: &TcpStream, meta: ConnectionMeta)
-                      -> Result<(), Box<dyn StdError>> {
-        Ok(())
+                      -> Result<&TcpStream, Box<dyn StdError>> {
+        Err(Error::from("not implement"))
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn StdError>> {
@@ -119,7 +119,7 @@ impl Engine {
                     };
 
                     let connection_meta = match Engine::build_connection_meta(
-                        transport.get_ref(), request).await {
+                        transport.get_ref(), &request).await {
                         Ok(r) => r,
                         Err(e) => {
                             println!("failed to process request {}", e);
@@ -135,13 +135,19 @@ impl Engine {
                             return;
                         }
                     };
+
+                    if let Err(e) = Engine::pipe(
+                        request, transport.get_ref(), outbound).await {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
                 }
             });
         }
         Ok(())
     }
 
-    async fn build_connection_meta(stream: &TcpStream, request: Request<()>)
+    async fn build_connection_meta(stream: &TcpStream, request: &Request<()>)
                                    -> Result<ConnectionMeta, Box<dyn StdError>> {
         let host = match request.uri().host() {
             Some(host) => host,
@@ -151,7 +157,12 @@ impl Engine {
         };
 
         let dst_addr = match host.to_socket_addrs() {
-            Ok(mut ip) => ip.next(),
+            Ok(mut addrs) => addrs.next(),
+            Err(e) => None
+        };
+
+        let src_addr = match stream.peer_addr() {
+            Ok(mut addr) => Some(addr),
             Err(e) => None
         };
 
@@ -159,11 +170,12 @@ impl Engine {
             udp: false,
             host: String::from(host),
             dst_addr,
-            src_addr: None,
+            src_addr,
         })
     }
 
-    async fn pipe(inbound: &TcpStream, outbound: &TcpStream) -> Result<(), Box<dyn StdError>> {
+    async fn pipe(request: Request<()>, inbound: &TcpStream, outbound: &TcpStream)
+                  -> Result<(), Box<dyn StdError>> {
         Ok(())
     }
 
