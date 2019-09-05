@@ -1,9 +1,5 @@
-mod config;
-mod engine;
-mod inbound;
-mod metrics;
-mod outbound;
-mod proxy;
+#![warn(rust_2018_idioms)]
+#![feature(async_closure)]
 
 #[macro_use]
 extern crate log;
@@ -11,18 +7,32 @@ extern crate log;
 #[macro_use]
 extern crate serde_derive;
 
-use async_std::prelude::*;
-use async_std::task;
+extern crate bytes;
+
+use bytes::BytesMut;
+use futures::{SinkExt, StreamExt};
+use http::{header::HeaderValue, Request, Response, StatusCode};
+use serde::Serialize;
+use std::{env, error::Error, fmt, io, io::Write};
+use tokio::{
+    codec::{Decoder, Encoder, Framed},
+    net::{TcpListener, TcpStream},
+};
 
 use clap::{App, Arg, SubCommand};
 
 use std::fs::File;
-use std::io::{self, Write};
 use std::net::UdpSocket;
 use std::path::Path;
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
+
+mod config;
+mod engine;
+mod metrics;
+mod outbound;
+mod proxy;
 
 use crate::config::Config;
 use crate::engine::Engine;
@@ -95,13 +105,20 @@ async fn run(config: Config) {
     // start script
 
     // start engine
-    let engine_config = engine::Config{modes: "global"};
+    let engine_config = engine::Config {
+        address: config.listener_addr,
+        modes: Option::from(String::from("global")),
+    };
     let engine = Engine::new(&engine_config);
-    engine.run();
+
+    if let Err(e) = engine.run().await {
+        println!("failed to run engine; error = {}", e);
+    }
     // stop script
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("Tache")
         .version("1.0")
         .author("Tache Team")
@@ -139,5 +156,8 @@ fn main() {
     let f = File::open(filename).unwrap();
     let config_file = serde_yaml::from_reader(f).unwrap();
     config.merge_file(config_file);
-    task::block_on(run(config))
+    config.listener_addr = Option::from(String::from("0.0.0.0:1080"));
+    run(config).await;
+
+    Ok(())
 }
