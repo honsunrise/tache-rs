@@ -1,5 +1,10 @@
+use log::error;
 use bytes::BytesMut;
-use futures::{SinkExt, StreamExt};
+use futures::{
+    SinkExt,
+    StreamExt,
+    future::{select_all, BoxFuture}
+};
 use http::{header::HeaderValue, Request, Response, StatusCode};
 use serde::Serialize;
 use std::{env, error::Error as StdError, fmt::{self, Display}, io};
@@ -11,6 +16,12 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+use crate::{
+    config::Config,
+    context::{Context, SharedContext}
+};
+
+pub(crate) mod dns_resolver;
 mod rules;
 mod http_s;
 mod sock5;
@@ -21,12 +32,6 @@ use crate::outbound::Outbound;
 use std::net::ToSocketAddrs;
 
 type MODE = Vec<Box<dyn rules::Rule + Send + Sync>>;
-
-#[derive(Clone, Default, Debug)]
-pub struct Config {
-    pub address: Option<String>,
-    pub modes: Option<String>,
-}
 
 #[derive(Debug)]
 struct Error {
@@ -211,4 +216,29 @@ impl Engine {
 
     fn delete_hop_by_hop_headers() {}
 }
+
+pub async fn run(config: Config) -> io::Result<()> {
+    let mut context = Context::new(config);
+
+    let mut vf = Vec::new();
+
+    if context.config().mode.enable_udp() {
+        // Clone config here, because the config for TCP relay will be modified
+        // after plugins started
+        let udp_context = SharedContext::new(context.clone());
+
+        // Run UDP relay before starting plugins
+        // Because plugins doesn't support UDP relay
+        let udp_fut = run_udp(udp_context);
+        vf.push(Box::pin(udp_fut) as BoxFuture<io::Result<()>>);
+    }
+
+    let tcp_fut = run_tcp(SharedContext::new(context));
+    vf.push(Box::pin(tcp_fut) as BoxFuture<io::Result<()>>);
+
+    let (res, ..) = select_all(vf.into_iter()).await;
+    error!("One of TCP servers exited unexpectly, result: {:?}", res);
+    Err(io::Error::new(io::ErrorKind::Other, "server exited unexpectly"))
+}
+
 
