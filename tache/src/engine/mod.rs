@@ -218,7 +218,7 @@ pub async fn run(config: Config) -> io::Result<()> {
     for inbound in config.inbounds.iter() {
         let listen_address = inbound.listen.listen_addr().clone();
         let fut = single_run(listen_address);
-        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn StdError>>>);
+        vf.push(Box::pin(fut));
     }
 
     let (res, ..) = select_all(vf.into_iter()).await;

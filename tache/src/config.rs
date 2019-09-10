@@ -558,7 +558,7 @@ impl Config {
                         }
                     };
                     if let Some(config) = group {
-                        for name_server in config.to_vec() {
+                        for name_server in config.iter().cloned() {
                             result.add_name_server(name_server);
                         }
                     }

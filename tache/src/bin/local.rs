@@ -7,7 +7,11 @@
 use std::{io::Result as IoResult, net::SocketAddr, process};
 
 use clap::{App, Arg};
-use futures::{future::Either, prelude::*, Future};
+use futures::{
+    future::{select, Either},
+    prelude::*,
+    Future,
+};
 use log::{debug, error, info};
 use tokio::net::signal;
 use tokio::runtime::Runtime;
@@ -68,7 +72,7 @@ fn launch_server(config: Config) -> IoResult<()> {
 
     let abort_signal = signal::ctrl_c()?;
 
-    let result = runtime.block_on(futures_util::future::select(
+    let result = runtime.block_on(select(
         Box::pin(run(config)),
         Box::pin(abort_signal.into_future()),
     ));
