@@ -3,7 +3,7 @@ use bytes::BytesMut;
 use futures::{
     SinkExt,
     StreamExt,
-    future::{select_all, BoxFuture}
+    future::{select_all, BoxFuture},
 };
 use http::{header::HeaderValue, Request, Response, StatusCode};
 use serde::Serialize;
@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     config::Config,
-    context::{Context, SharedContext}
+    context::{Context, SharedContext},
 };
 
 pub(crate) mod dns_resolver;
@@ -29,7 +29,7 @@ mod redir;
 mod tun;
 
 use crate::outbound::Outbound;
-use std::net::ToSocketAddrs;
+use std::net::{ToSocketAddrs, SocketAddr};
 
 type MODE = Vec<Box<dyn rules::Rule + Send + Sync>>;
 
@@ -72,18 +72,16 @@ impl ConnectionMeta {
 }
 
 pub struct Engine {
-    listener_address: String,
     outbounds: Vec<Box<dyn Outbound>>,
     modes: Arc<HashMap<String, MODE>>,
 }
 
 impl Engine {
     #[inline]
-    pub fn new(config: &Config) -> Engine {
+    pub fn new() -> Engine {
         let modes = Arc::new(HashMap::new());
 
         Engine {
-            listener_address: config.address.as_ref().unwrap().clone(),
             outbounds: vec![],
             modes,
         }
@@ -98,91 +96,6 @@ impl Engine {
     }
 
     pub fn lookup(&self) {}
-
-    async fn run_rule(stream: &TcpStream, meta: ConnectionMeta)
-                      -> Result<&TcpStream, Box<dyn StdError>> {
-        Err(Error::from("not implement"))
-    }
-
-    pub async fn run(&self) -> Result<(), Box<dyn StdError>> {
-        let listen_address = &self.listener_address;
-        let mut incoming = TcpListener::bind(listen_address).await?.incoming();
-        println!("Listening on: {}", listen_address);
-
-        while let Some(Ok(inbound)) = incoming.next().await {
-            let modes = self.modes.clone();
-            tokio::spawn(async move {
-                let mut transport = Framed::new(inbound, http_s::Http);
-
-                while let Some(request) = transport.next().await {
-                    let request = match request {
-                        Ok(r) => r,
-                        Err(e) => {
-                            println!("failed to process request {}", e);
-                            return;
-                        }
-                    };
-
-                    let connection_meta = match Engine::build_connection_meta(
-                        transport.get_ref(), &request).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            println!("failed to process request {}", e);
-                            return;
-                        }
-                    };
-
-                    let outbound = match Engine::run_rule(
-                        transport.get_ref(), connection_meta).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            println!("failed to process request {}", e);
-                            return;
-                        }
-                    };
-
-                    if let Err(e) = Engine::pipe(
-                        request, transport.get_ref(), outbound).await {
-                        println!("failed to process request {}", e);
-                        return;
-                    }
-                }
-            });
-        }
-        Ok(())
-    }
-
-    async fn build_connection_meta(stream: &TcpStream, request: &Request<()>)
-                                   -> Result<ConnectionMeta, Box<dyn StdError>> {
-        let host = match request.uri().host() {
-            Some(host) => host,
-            None => {
-                return Err(Error::from("not have host"));
-            }
-        };
-
-        let dst_addr = match host.to_socket_addrs() {
-            Ok(mut addrs) => addrs.next(),
-            Err(e) => None
-        };
-
-        let src_addr = match stream.peer_addr() {
-            Ok(mut addr) => Some(addr),
-            Err(e) => None
-        };
-
-        Ok(ConnectionMeta {
-            udp: false,
-            host: String::from(host),
-            dst_addr,
-            src_addr,
-        })
-    }
-
-    async fn pipe(request: Request<()>, inbound: &TcpStream, outbound: &TcpStream)
-                  -> Result<(), Box<dyn StdError>> {
-        Ok(())
-    }
 
     async fn respond<T>(req: Request<T>) -> Result<Response<String>, Box<dyn StdError>> {
         let mut response = Response::builder();
@@ -217,28 +130,100 @@ impl Engine {
     fn delete_hop_by_hop_headers() {}
 }
 
+async fn build_connection_meta(stream: &TcpStream, request: &Request<()>)
+                               -> Result<ConnectionMeta, Box<dyn StdError>> {
+    let host = match request.uri().host() {
+        Some(host) => host,
+        None => {
+            return Err(Error::from("not have host"));
+        }
+    };
+
+    let dst_addr = match host.to_socket_addrs() {
+        Ok(mut addrs) => addrs.next(),
+        Err(e) => None
+    };
+
+    let src_addr = match stream.peer_addr() {
+        Ok(addr) => Some(addr),
+        Err(e) => None
+    };
+
+    Ok(ConnectionMeta {
+        udp: false,
+        host: String::from(host),
+        dst_addr,
+        src_addr,
+    })
+}
+
+async fn run_rule(stream: &TcpStream, meta: ConnectionMeta)
+                  -> Result<&TcpStream, Box<dyn StdError>> {
+    Err(Error::from("not implement"))
+}
+
+async fn pipe(request: Request<()>, inbound: &TcpStream, outbound: &TcpStream)
+              -> Result<(), Box<dyn StdError>> {
+    Ok(())
+}
+
+async fn single_run(listen_address: SocketAddr) -> Result<(), Box<dyn StdError>> {
+    let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
+    println!("Listening on: {}", &listen_address);
+
+    while let Some(Ok(inbound)) = incoming.next().await {
+        tokio::spawn(async move {
+            let mut transport = Framed::new(inbound, http_s::Http);
+
+            while let Some(request) = transport.next().await {
+                let request = match request {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                let connection_meta = match build_connection_meta(
+                    transport.get_ref(), &request).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                let outbound = match run_rule(
+                    transport.get_ref(), connection_meta).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                if let Err(e) = pipe(
+                    request, transport.get_ref(), outbound).await {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
 pub async fn run(config: Config) -> io::Result<()> {
-    let mut context = Context::new(config);
-
     let mut vf = Vec::new();
-
-    if context.config().mode.enable_udp() {
-        // Clone config here, because the config for TCP relay will be modified
-        // after plugins started
-        let udp_context = SharedContext::new(context.clone());
-
-        // Run UDP relay before starting plugins
-        // Because plugins doesn't support UDP relay
-        let udp_fut = run_udp(udp_context);
-        vf.push(Box::pin(udp_fut) as BoxFuture<io::Result<()>>);
+    for inbound in config.inbounds.iter() {
+        let listen_address = inbound.listen.listen_addr().clone();
+        let fut = single_run(listen_address);
+        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn StdError>>>);
     }
 
-    let tcp_fut = run_tcp(SharedContext::new(context));
-    vf.push(Box::pin(tcp_fut) as BoxFuture<io::Result<()>>);
-
     let (res, ..) = select_all(vf.into_iter()).await;
-    error!("One of TCP servers exited unexpectly, result: {:?}", res);
-    Err(io::Error::new(io::ErrorKind::Other, "server exited unexpectly"))
+    error!("One of inbound exited unexpectedly, result: {:?}", res);
+    Err(io::Error::new(io::ErrorKind::Other, "server exited unexpectedly"))
 }
 
 

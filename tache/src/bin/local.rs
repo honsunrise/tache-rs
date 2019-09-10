@@ -7,18 +7,18 @@
 use std::{io::Result as IoResult, net::SocketAddr, process};
 
 use clap::{App, Arg};
-use futures::{future::Either, Future};
+use futures::{future::Either, prelude::*, Future};
 use log::{debug, error, info};
+use tokio::net::signal;
 use tokio::runtime::Runtime;
 
-use tache::{run, Config, ConfigType, Mode, ServerAddr, ServerConfig};
+use tache::{run, Config, Mode};
 
 mod logging;
-mod monitor;
 
 fn main() {
     let matches = App::new("tache")
-        .version(shadowsocks::VERSION)
+        .version(tache::VERSION)
         .about("A fast tunnel proxy that helps you bypass firewalls.")
         .arg(
             Arg::with_name("VERBOSE")
@@ -37,20 +37,20 @@ fn main() {
 
     let debug_level = matches.occurrences_of("VERBOSE");
 
-    logging::init(without_time, debug_level, "sslocal");
+    logging::init(true, debug_level, "tachelocal");
 
     let mut config = match matches.value_of("CONFIG") {
-        Some(config_path) => match Config::load_from_file(config_path, ConfigType::Local) {
+        Some(config_path) => match Config::load_from_file(config_path) {
             Ok(cfg) => cfg,
             Err(err) => {
                 error!("{:?}", err);
                 return;
             }
         },
-        None => Config::new(ConfigType::Local),
+        None => Config::new(),
     };
 
-    info!("ShadowSocks {}", shadowsocks::VERSION);
+    info!("Tache {}", tache::VERSION);
 
     debug!("Config: {:?}", config);
 
@@ -64,19 +64,21 @@ fn main() {
 }
 
 fn launch_server(config: Config) -> IoResult<()> {
-    let mut runtime = Runtime::new().expect("Creating runtime");
+    let runtime = Runtime::new().expect("Creating runtime");
 
-    let abort_signal = monitor::create_signal_monitor();
-    let result = runtime.block_on(run(config).select2(abort_signal));
+    let abort_signal = signal::ctrl_c()?;
 
-    runtime.shutdown_now().wait().unwrap();
+    let result = runtime.block_on(futures_util::future::select(
+        Box::pin(run(config)),
+        Box::pin(abort_signal.into_future()),
+    ));
+
+    runtime.shutdown_now();
 
     match result {
         // Server future resolved without an error. This should never happen.
-        Ok(Either::A(_)) => panic!("Server exited unexpectly"),
-        // Server future resolved with an error.
-        Err(Either::A((err, _))) => Err(err),
+        Either::Left(_) => panic!("Server exited unexpectedly"),
         // The abort signal future resolved. Means we should just exit.
-        Ok(Either::B(..)) | Err(Either::B(..)) => Ok(()),
+        Either::Right(..) => Ok(()),
     }
 }

@@ -3,6 +3,7 @@ use std::{
     convert::From,
     default::Default,
     error,
+    fmt::Write,
     fmt::{self, Debug, Display, Formatter},
     fs::OpenOptions,
     io::Read,
@@ -27,10 +28,17 @@ use serde_urlencoded;
 use trust_dns_resolver::config::{NameServerConfigGroup, ResolverConfig};
 use url::{self, Url};
 
-type DomainName = (String, u16);
+#[derive(Clone, Debug)]
+pub struct DomainName(String, u16);
 
 #[derive(Debug)]
 pub struct DomainNameError;
+
+impl Display for DomainNameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Domain name format error")
+    }
+}
 
 impl FromStr for DomainName {
     type Err = DomainNameError;
@@ -39,7 +47,7 @@ impl FromStr for DomainName {
         let mut sp = s.split(':');
         match (sp.next(), sp.next()) {
             (Some(dn), Some(port)) => match port.parse::<u16>() {
-                Ok(port) => Ok((dn.to_owned(), port)),
+                Ok(port) => Ok(DomainName(dn.to_owned(), port)),
                 Err(..) => Err(DomainNameError),
             },
             _ => Err(DomainNameError),
@@ -79,7 +87,7 @@ impl<'de> Deserialize<'de> for DomainName {
             deserializer.deserialize_str(DomainNameVisitor)
         } else {
             <(String, u16)>::deserialize(deserializer)
-                .map(|(ip, port)| -> DomainName { (ip, port) })
+                .map(|(ip, port)| -> DomainName { DomainName(ip, port) })
         }
     }
 }
@@ -91,10 +99,10 @@ impl Serialize for DomainName {
     {
         if serializer.is_human_readable() {
             let mut output = String::new();
-            write!(output, "{}:{}", self.0, self.1)?;
+            write!(output, "{}:{}", self.0, self.1).unwrap();
             serializer.serialize_str(&output)
         } else {
-            (self.0, self.1).serialize(serializer)
+            (&self.0, self.1).serialize(serializer)
         }
     }
 }
@@ -123,7 +131,7 @@ impl Address {
     pub fn host(&self) -> String {
         match *self {
             Address::SocketAddr(ref s) => s.ip().to_string(),
-            Address::DomainName(ref dm) => dm.clone(),
+            Address::DomainName(ref dm) => dm.0.clone(),
         }
     }
 
@@ -150,7 +158,7 @@ impl FromStr for Address {
                 let mut sp = s.split(':');
                 match (sp.next(), sp.next()) {
                     (Some(dn), Some(port)) => match port.parse::<u16>() {
-                        Ok(port) => Ok(Address::DomainName((dn.to_owned(), port))),
+                        Ok(port) => Ok(Address::DomainName(DomainName(dn.to_owned(), port))),
                         Err(..) => Err(AddressError),
                     },
                     _ => Err(AddressError),

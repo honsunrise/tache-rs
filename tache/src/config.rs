@@ -18,7 +18,11 @@ use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use json5;
 use log::{error, trace};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, Deserialize, Deserializer, Visitor},
+    ser::{self, Serialize, Serializer},
+    *,
+};
 use serde_urlencoded;
 use trust_dns_resolver::config::{NameServerConfigGroup, ResolverConfig};
 use url::{self, Url};
@@ -26,14 +30,14 @@ use url::{self, Url};
 use crate::utils::Address;
 
 /// Configuration
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     pub mode: Mode,
     pub log_level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api: Option<ApiConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dns: Option<DnsConfig>,
+    pub dns: Option<DNSConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_delay: Option<bool>,
     pub inbounds: Vec<InboundConfig>,
@@ -43,7 +47,8 @@ pub struct Config {
 }
 
 /// Server mode
-#[derive(Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
 pub enum Mode {
     Rule,
     Global,
@@ -73,8 +78,15 @@ impl FromStr for Mode {
     }
 }
 
+impl Default for Mode {
+    fn default() -> Self {
+        Mode::Direct
+    }
+}
+
 /// LogLevel
-#[derive(Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
 pub enum LogLevel {
     Info,
     Warning,
@@ -110,54 +122,165 @@ impl FromStr for LogLevel {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ApiConfig {
-    listen: Address,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    secret: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    external_ui: Option<String>,
+impl Default for LogLevel {
+    fn default() -> Self {
+        LogLevel::Info
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct DnsConfig {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ApiConfig {
+    pub listen: Address,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ipv6: Option<bool>,
-    listen: Address,
-    enhanced_mode: String,
-    servers: Vec<String>,
-    fallback: Vec<String>,
+    pub secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_ui: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct InboundConfig {
-    name: String,
-    kind: String,
-    listen: Address,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    authentication: Option<Vec<String>>,
+/// DNS Server work mode
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum DNSMode {
+    RedirHost,
+    FakeIP,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ProxyConfig {
-    name: String,
-    kind: String,
-    address: Address,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timeout: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    udp_timeout: Option<u64>,
+impl fmt::Display for DNSMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            DNSMode::RedirHost => f.write_str("redir-host"),
+            DNSMode::FakeIP => f.write_str("fake-ip"),
+        }
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ProxyGroupConfig {
+impl FromStr for DNSMode {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "redir-host" => Ok(DNSMode::RedirHost),
+            "fake-ip" => Ok(DNSMode::FakeIP),
+            _ => Err(()),
+        }
+    }
+}
+
+impl Default for DNSMode {
+    fn default() -> Self {
+        DNSMode::RedirHost
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DNSConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<bool>,
+    pub listen: Address,
+    pub mode: DNSMode,
+    pub servers: Vec<String>,
+    pub fallback: Vec<String>,
+}
+
+/// Inbound Kind
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum InboundKind {
+    HTTP,
+    Socks5,
+    Redir,
+    TUN,
+}
+
+impl fmt::Display for InboundKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            InboundKind::HTTP => f.write_str("http"),
+            InboundKind::Socks5 => f.write_str("socks5"),
+            InboundKind::Redir => f.write_str("redir"),
+            InboundKind::TUN => f.write_str("tun"),
+        }
+    }
+}
+
+impl FromStr for InboundKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "http" => Ok(InboundKind::HTTP),
+            "socks5" => Ok(InboundKind::Socks5),
+            "redir" => Ok(InboundKind::Redir),
+            "tun" => Ok(InboundKind::TUN),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InboundConfig {
+    pub name: String,
+    pub kind: InboundKind,
+    pub listen: Address,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<Vec<String>>,
+}
+
+/// Inbound Kind
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum ProxyKind {
+    Shadowsocks,
+    VMESS,
+    Socks5,
+    HTTP,
+}
+
+impl fmt::Display for ProxyKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ProxyKind::Shadowsocks => f.write_str("shadowsocks"),
+            ProxyKind::VMESS => f.write_str("vmess"),
+            ProxyKind::Socks5 => f.write_str("socks5"),
+            ProxyKind::HTTP => f.write_str("http"),
+        }
+    }
+}
+
+impl FromStr for ProxyKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "shadowsocks" => Ok(ProxyKind::Shadowsocks),
+            "vmess" => Ok(ProxyKind::VMESS),
+            "socks5" => Ok(ProxyKind::Socks5),
+            "http" => Ok(ProxyKind::HTTP),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProxyConfig {
+    pub name: String,
+    pub kind: ProxyKind,
+    pub address: Address,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_timeout: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProxyGroupConfig {
     name: String,
     kind: String,
     proxies: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct RuleConfig {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RuleConfig {
     kind: String,
     source: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -222,7 +345,17 @@ impl Debug for Error {
 impl Config {
     /// Creates an empty configuration
     pub fn new() -> Config {
-        Default::default()
+        Config {
+            mode: Default::default(),
+            log_level: Default::default(),
+            api: None,
+            dns: None,
+            no_delay: None,
+            inbounds: vec![],
+            proxies: vec![],
+            proxy_groups: vec![],
+            rules: vec![],
+        }
     }
 
     fn check_valid(&self) -> Result<(), Error> {
@@ -393,48 +526,50 @@ impl Config {
     }
 
     pub fn get_dns_config(&self) -> Option<ResolverConfig> {
-        self.dns.as_ref().and_then(|ds| {
-            match &ds[..] {
-                "google" => Some(ResolverConfig::google()),
+        self.dns
+            .as_ref()
+            .map(|ds| ds.servers.clone())
+            .and_then(|servers| {
+                let mut result = ResolverConfig::new();
+                for address in servers {
+                    let group = match &address[..] {
+                        "google" => Some(NameServerConfigGroup::google()),
 
-                "cloudflare" => Some(ResolverConfig::cloudflare()),
-                "cloudflare_tls" => Some(ResolverConfig::cloudflare_tls()),
-                "cloudflare_https" => Some(ResolverConfig::cloudflare_https()),
+                        "cloudflare" => Some(NameServerConfigGroup::cloudflare()),
+                        "cloudflare_tls" => Some(NameServerConfigGroup::cloudflare_tls()),
+                        "cloudflare_https" => Some(NameServerConfigGroup::cloudflare_https()),
 
-                "quad9" => Some(ResolverConfig::quad9()),
-                "quad9_tls" => Some(ResolverConfig::quad9_tls()),
+                        "quad9" => Some(NameServerConfigGroup::quad9()),
+                        "quad9_tls" => Some(NameServerConfigGroup::quad9_tls()),
 
-                _ => {
-                    // Set ips directly
-                    match ds.parse::<IpAddr>() {
-                        Ok(ip) => Some(ResolverConfig::from_parts(
-                            None,
-                            vec![],
-                            NameServerConfigGroup::from_ips_clear(&[ip], 53),
-                        )),
-                        Err(..) => {
-                            error!(
-                                "Failed to parse DNS \"{}\" in config to IpAddr, fallback to system config",
-                                ds
-                            );
-                            None
+                        _ => {
+                            // Set ips directly
+                            match address.parse::<IpAddr>() {
+                                Ok(ip) => Some(NameServerConfigGroup::from_ips_clear(&[ip], 53)),
+                                Err(..) => {
+                                    error!(
+                                        "Failed to parse DNS \"{}\" in config to IpAddr, \
+                                         fallback to system config",
+                                        address
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                    };
+                    if let Some(config) = group {
+                        for name_server in config.to_vec() {
+                            result.add_name_server(name_server);
                         }
                     }
                 }
-            }
-        })
-    }
-
-    pub fn get_remote_dns(&self) -> SocketAddr {
-        match self.remote_dns {
-            None => SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53)),
-            Some(ip) => ip,
-        }
+                Some(result)
+            })
     }
 }
 
 impl fmt::Display for Config {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)?
+        write!(f, "{}", self)
     }
 }

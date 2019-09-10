@@ -6,23 +6,23 @@ use std::{
 };
 
 use tokio::{self, future::Future};
-use trust_dns_resolver::{config::ResolverConfig, AsyncResolver};
+use trust_dns_resolver::{config::ResolverConfig, Resolver};
 
 use crate::context::SharedContext;
 
-pub fn create_resolver(dns: Option<ResolverConfig>) -> AsyncResolver {
-    let (resolver, bg) = {
+pub fn create_resolver(dns: Option<ResolverConfig>) -> io::Result<Resolver> {
+    let resolver = {
         // To make this independent, if targeting macOS, BSD, Linux, or Windows, we can use the system's configuration:
         #[cfg(any(unix, windows))]
         {
             if let Some(conf) = dns {
                 use trust_dns_resolver::config::ResolverOpts;
-                AsyncResolver::new(conf, ResolverOpts::default())
+                Resolver::new(conf, ResolverOpts::default())
             } else {
                 use trust_dns_resolver::system_conf::read_system_conf;
                 // use the system resolver configuration
                 let (config, opts) = read_system_conf().expect("Failed to read global dns sysconf");
-                AsyncResolver::new(config, opts)
+                Resolver::new(config, opts)
             }
         }
 
@@ -33,16 +33,13 @@ pub fn create_resolver(dns: Option<ResolverConfig>) -> AsyncResolver {
             use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
             if let Some(conf) = dns {
-                AsyncResolver::new(conf, ResolverOpts::default())
+                Resolver::new(conf, ResolverOpts::default())
             } else {
                 // Get a new resolver with the google nameservers as the upstream recursive resolvers
-                AsyncResolver::new(ResolverConfig::google(), ResolverOpts::default())
+                Resolver::new(ResolverConfig::google(), ResolverOpts::default())
             }
         }
     };
-
-    // NOTE: resolving will always be called inside a future.
-    tokio::spawn(bg);
 
     resolver
 }
@@ -50,11 +47,10 @@ pub fn create_resolver(dns: Option<ResolverConfig>) -> AsyncResolver {
 async fn inner_resolve(
     context: SharedContext,
     addr: &str,
-    port: u16,
-    check_forbidden: bool,
+    port: u16
 ) -> io::Result<Vec<SocketAddr>> {
     // let owned_addr = addr.to_owned();
-    match context.dns_resolver().lookup_ip(addr).await {
+    match context.dns_resolver().lookup_ip(addr) {
         Err(err) => {
             // error!("Failed to resolve {}, err: {}", owned_addr, err);
             Err(io::Error::new(
@@ -65,13 +61,6 @@ async fn inner_resolve(
         Ok(lookup_result) => {
             let mut vaddr = Vec::new();
             for ip in lookup_result.iter() {
-                if check_forbidden {
-                    let forbidden_ip = context.config().forbidden_ip;
-                    if forbidden_ip.contains(&ip) {
-                        // debug!("Resolved {} => {}, which is skipped by forbidden_ip", owned_addr, ip);
-                        continue;
-                    }
-                }
                 vaddr.push(SocketAddr::new(ip, port));
             }
 
@@ -95,7 +84,6 @@ pub async fn resolve(
     context: SharedContext,
     addr: &str,
     port: u16,
-    check_forbidden: bool,
 ) -> io::Result<Vec<SocketAddr>> {
-    inner_resolve(context, addr, port, check_forbidden).await
+    inner_resolve(context, addr, port).await
 }
