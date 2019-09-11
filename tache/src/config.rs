@@ -16,7 +16,6 @@ use std::{
 
 use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
 use bytes::Bytes;
-use json5;
 use log::{error, trace};
 use serde::{
     de::{self, Deserialize, Deserializer, Visitor},
@@ -31,6 +30,7 @@ use crate::utils::Address;
 
 /// Configuration
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub mode: Mode,
     pub log_level: LogLevel,
@@ -48,7 +48,7 @@ pub struct Config {
 
 /// Server mode
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[serde(rename_all = "kebab-case")]
 pub enum Mode {
     Rule,
     Global,
@@ -86,7 +86,7 @@ impl Default for Mode {
 
 /// LogLevel
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[serde(rename_all = "kebab-case")]
 pub enum LogLevel {
     Info,
     Warning,
@@ -139,7 +139,7 @@ pub struct ApiConfig {
 
 /// DNS Server work mode
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[serde(rename_all = "kebab-case")]
 pub enum DNSMode {
     RedirHost,
     FakeIP,
@@ -184,7 +184,7 @@ pub struct DNSConfig {
 
 /// Inbound Kind
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[serde(rename_all = "lowercase")]
 pub enum InboundKind {
     HTTP,
     Socks5,
@@ -218,58 +218,66 @@ impl FromStr for InboundKind {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct InboundConfig {
-    pub name: String,
-    pub kind: InboundKind,
-    pub listen: Address,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authentication: Option<Vec<String>>,
-}
-
-/// Inbound Kind
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
-pub enum ProxyKind {
-    Shadowsocks,
-    VMESS,
-    Socks5,
-    HTTP,
-}
-
-impl fmt::Display for ProxyKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            ProxyKind::Shadowsocks => f.write_str("shadowsocks"),
-            ProxyKind::VMESS => f.write_str("vmess"),
-            ProxyKind::Socks5 => f.write_str("socks5"),
-            ProxyKind::HTTP => f.write_str("http"),
-        }
-    }
-}
-
-impl FromStr for ProxyKind {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "shadowsocks" => Ok(ProxyKind::Shadowsocks),
-            "vmess" => Ok(ProxyKind::VMESS),
-            "socks5" => Ok(ProxyKind::Socks5),
-            "http" => Ok(ProxyKind::HTTP),
-            _ => Err(()),
-        }
-    }
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum InboundConfig {
+    HTTP {
+        name: String,
+        listen: Address,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authentication: Option<Vec<String>>,
+    },
+    Socks5 {
+        name: String,
+        listen: Address,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authentication: Option<Vec<String>>,
+    },
+    Redir {
+        name: String,
+        listen: Address,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authentication: Option<Vec<String>>,
+    },
+    TUN {
+        name: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ProxyConfig {
-    pub name: String,
-    pub kind: ProxyKind,
-    pub address: Address,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub udp_timeout: Option<u64>,
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum ProxyConfig {
+    Shadowsocks {
+        name: String,
+        address: Address,
+        cipher: String,
+        password: String,
+        udp: bool,
+    },
+    VMESS {
+        name: String,
+        address: Address,
+        uuid: String,
+        #[serde(rename = "alterId")]
+        alter_id: i64,
+        cipher: String,
+        tls: Option<bool>,
+    },
+    Socks5 {
+        name: String,
+        address: Address,
+        username: Option<String>,
+        password: Option<String>,
+        tls: Option<bool>,
+        skip_cert_verify: Option<bool>,
+    },
+    HTTP {
+        name: String,
+        address: Address,
+        username: Option<String>,
+        password: Option<String>,
+        tls: Option<bool>,
+        skip_cert_verify: Option<bool>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -513,7 +521,7 @@ impl Config {
     }
 
     pub fn load_from_str(s: &str) -> Result<Config, Error> {
-        let c = json5::from_str::<Config>(s)?;
+        let c = serde_yaml::from_str::<Config>(s).unwrap();
         c.check_valid()?;
         Ok(c)
     }

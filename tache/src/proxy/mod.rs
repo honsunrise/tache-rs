@@ -1,3 +1,7 @@
+mod http;
+mod shadowsocks;
+mod socks;
+
 pub trait Proxy {
     fn name(&self) -> &'static str;
     fn udp(&self) -> bool;

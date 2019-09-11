@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    config::Config,
+    config::{Config, InboundConfig},
     context::{Context, SharedContext},
 };
 
@@ -30,6 +30,7 @@ mod tun;
 
 use crate::outbound::Outbound;
 use std::net::{ToSocketAddrs, SocketAddr};
+use crate::config::ProxyConfig;
 
 type MODE = Vec<Box<dyn rules::Rule + Send + Sync>>;
 
@@ -167,7 +168,7 @@ async fn pipe(request: Request<()>, inbound: &TcpStream, outbound: &TcpStream)
     Ok(())
 }
 
-async fn single_run(listen_address: SocketAddr) -> Result<(), Box<dyn StdError>> {
+async fn single_run_http(listen_address: SocketAddr) -> Result<(), Box<dyn StdError>> {
     let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
     println!("Listening on: {}", &listen_address);
 
@@ -213,12 +214,156 @@ async fn single_run(listen_address: SocketAddr) -> Result<(), Box<dyn StdError>>
     Ok(())
 }
 
+async fn single_run_socks(listen_address: SocketAddr) -> Result<(), Box<dyn StdError>> {
+    let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
+    println!("Listening on: {}", &listen_address);
+
+    while let Some(Ok(inbound)) = incoming.next().await {
+        tokio::spawn(async move {
+            let mut transport = Framed::new(inbound, http_s::Http);
+
+            while let Some(request) = transport.next().await {
+                let request = match request {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                let connection_meta = match build_connection_meta(
+                    transport.get_ref(), &request).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                let outbound = match run_rule(
+                    transport.get_ref(), connection_meta).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                if let Err(e) = pipe(
+                    request, transport.get_ref(), outbound).await {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
+async fn single_run_redir(listen_address: SocketAddr) -> Result<(), Box<dyn StdError>> {
+    let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
+    println!("Listening on: {}", &listen_address);
+
+    while let Some(Ok(inbound)) = incoming.next().await {
+        tokio::spawn(async move {
+            let mut transport = Framed::new(inbound, http_s::Http);
+
+            while let Some(request) = transport.next().await {
+                let request = match request {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                let connection_meta = match build_connection_meta(
+                    transport.get_ref(), &request).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                let outbound = match run_rule(
+                    transport.get_ref(), connection_meta).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("failed to process request {}", e);
+                        return;
+                    }
+                };
+
+                if let Err(e) = pipe(
+                    request, transport.get_ref(), outbound).await {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
+async fn single_run_tun() -> Result<(), Box<dyn StdError>> {
+    Ok(())
+}
+
 pub async fn run(config: Config) -> io::Result<()> {
     let mut vf = Vec::new();
+    // setup proxies
+    for proxy in config.proxies.iter() {
+        match proxy {
+            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
+                tokio::spawn(async move {
+
+                });
+            }
+            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
+                tokio::spawn(async move {
+
+                });
+            }
+            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
+                tokio::spawn(async move {
+
+                });
+            }
+            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
+                tokio::spawn(async move {
+
+                });
+            }
+        };
+    }
+
+    // setup inbounds
     for inbound in config.inbounds.iter() {
-        let listen_address = inbound.listen.listen_addr().clone();
-        let fut = single_run(listen_address);
-        vf.push(Box::pin(fut));
+        match inbound {
+            InboundConfig::HTTP { name: _, listen, authentication: _ } => {
+                for addr in listen.to_socket_addrs()? {
+                    let fut = single_run_http(addr);
+                    vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn StdError>>>);
+                }
+            }
+            InboundConfig::Socks5 { name: _, listen, authentication: _ } => {
+                for addr in listen.to_socket_addrs()? {
+                    let fut = single_run_socks(addr);
+                    vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn StdError>>>);
+                }
+            }
+            InboundConfig::Redir { name: _, listen, authentication: _ } => {
+                for addr in listen.to_socket_addrs()? {
+                    let fut = single_run_redir(addr);
+                    vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn StdError>>>);
+                }
+            }
+            InboundConfig::TUN { name: _ } => {
+                let fut = single_run_tun();
+                vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn StdError>>>);
+            }
+        };
     }
 
     let (res, ..) = select_all(vf.into_iter()).await;

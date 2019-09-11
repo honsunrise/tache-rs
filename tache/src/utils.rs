@@ -6,13 +6,14 @@ use std::{
     fmt::Write,
     fmt::{self, Debug, Display, Formatter},
     fs::OpenOptions,
-    io::Read,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    io::{self, Read},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs},
     option::Option,
     path::Path,
     str::FromStr,
     string::ToString,
     time::Duration,
+    vec,
 };
 
 use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
@@ -29,7 +30,7 @@ use trust_dns_resolver::config::{NameServerConfigGroup, ResolverConfig};
 use url::{self, Url};
 
 #[derive(Clone, Debug)]
-pub struct DomainName(String, u16);
+pub struct DomainName(pub String, pub u16);
 
 #[derive(Debug)]
 pub struct DomainNameError;
@@ -118,15 +119,6 @@ pub enum Address {
 }
 
 impl Address {
-    /// Get address for server listener
-    /// Panic if address is domain name
-    pub fn listen_addr(&self) -> &SocketAddr {
-        match *self {
-            Address::SocketAddr(ref s) => s,
-            _ => panic!("Cannot use domain name as server listen address"),
-        }
-    }
-
     /// Get string representation of domain
     pub fn host(&self) -> String {
         match *self {
@@ -171,5 +163,36 @@ impl FromStr for Address {
 impl Display for Address {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self)
+    }
+}
+
+impl ToSocketAddrs for Address {
+    type Iter = Iter;
+
+    fn to_socket_addrs(&self) -> io::Result<Self::Iter> {
+        let iter = match *self {
+            Address::SocketAddr(addr) => Iter::SocketAddr(Some(addr)),
+            Address::DomainName(ref domain) => {
+                let it = (domain.0.as_ref(), domain.1).to_socket_addrs()?;
+                Iter::DomainName(it)
+            }
+        };
+        Ok(iter)
+    }
+}
+
+pub enum Iter {
+    SocketAddr(Option<SocketAddr>),
+    DomainName(vec::IntoIter<SocketAddr>),
+}
+
+impl Iterator for Iter {
+    type Item = SocketAddr;
+
+    fn next(&mut self) -> Option<SocketAddr> {
+        match self {
+            Iter::SocketAddr(ref mut addr) => addr.take(),
+            Iter::DomainName(ref mut it) => it.next(),
+        }
     }
 }
