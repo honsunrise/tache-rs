@@ -92,13 +92,13 @@ proxies:
   - { name: "http", kind: http, address: server:2019, tls: true, skip-cert-verify: true }
 
 proxy-groups:
-  # url-test select which proxy will be used by benchmarking speed to a URL.
+  # url-test select which protocol will be used by benchmarking speed to a URL.
   - { name: "auto", kind: url-test, proxies: ["ss1", "ss2", "vmess1"], url: "http://www.gstatic.com/generate_204", interval: 300 }
 
   # fallback select an available policy by priority. The availability is tested by accessing an URL, just like an auto url-test group.
   - { name: "fallback-auto", kind: fallback, proxies: ["ss1", "ss2", "vmess1"], url: "http://www.gstatic.com/generate_204", interval: 300 }
 
-  # load-balance: The request of the same eTLD will be dial on the same proxy.
+  # load-balance: The request of the same eTLD will be dial on the same protocol.
   - { name: "load-balance", kind: load-balance, proxies: ["ss1", "ss2", "vmess1"], url: "http://www.gstatic.com/generate_204", interval: 300 }
 
 rules:

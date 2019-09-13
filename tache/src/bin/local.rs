@@ -23,7 +23,7 @@ mod logging;
 fn main() {
     let matches = App::new("tache")
         .version(tache::VERSION)
-        .about("A fast tunnel proxy that helps you bypass firewalls.")
+        .about("A fast tunnel protocol that helps you bypass firewalls.")
         .arg(
             Arg::with_name("VERBOSE")
                 .short("v")

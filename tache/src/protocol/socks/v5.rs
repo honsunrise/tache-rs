@@ -162,7 +162,7 @@ pub struct Socks5Stream {
 }
 
 impl Socks5Stream {
-    /// Connects to a target server through a SOCKS5 proxy.
+    /// Connects to a target server through a SOCKS5 protocol.
     pub fn connect<T, U>(proxy: T, target: U) -> io::Result<Socks5Stream>
     where
         T: ToSocketAddrs,
@@ -171,7 +171,7 @@ impl Socks5Stream {
         Self::connect_raw(1, proxy, target, &Authentication::None)
     }
 
-    /// Connects to a target server through a SOCKS5 proxy using given
+    /// Connects to a target server through a SOCKS5 protocol using given
     /// username and password.
     pub fn connect_with_password<T, U>(
         proxy: T,
@@ -300,7 +300,7 @@ impl Socks5Stream {
         Ok(())
     }
 
-    /// Returns the proxy-side address of the connection between the proxy and
+    /// Returns the protocol-side address of the connection between the protocol and
     /// target server.
     pub fn proxy_addr(&self) -> &Address {
         &self.proxy_addr
@@ -359,9 +359,9 @@ impl<'a> Write for &'a Socks5Stream {
 pub struct Socks5Listener(Socks5Stream);
 
 impl Socks5Listener {
-    /// Initiates a BIND request to the specified proxy.
+    /// Initiates a BIND request to the specified protocol.
     ///
-    /// The proxy will filter incoming connections based on the value of
+    /// The protocol will filter incoming connections based on the value of
     /// `target`.
     pub fn bind<T, U>(proxy: T, target: U) -> io::Result<Socks5Listener>
     where
@@ -370,10 +370,10 @@ impl Socks5Listener {
     {
         Socks5Stream::connect_raw(2, proxy, target, &Authentication::None).map(Socks5Listener)
     }
-    /// Initiates a BIND request to the specified proxy using given username
+    /// Initiates a BIND request to the specified protocol using given username
     /// and password.
     ///
-    /// The proxy will filter incoming connections based on the value of
+    /// The protocol will filter incoming connections based on the value of
     /// `target`.
     pub fn bind_with_password<T, U>(
         proxy: T,
@@ -389,7 +389,7 @@ impl Socks5Listener {
         Socks5Stream::connect_raw(2, proxy, target, &auth).map(Socks5Listener)
     }
 
-    /// The address of the proxy-side TCP listener.
+    /// The address of the protocol-side TCP listener.
     ///
     /// This should be forwarded to the remote process, which should open a
     /// connection to it.
@@ -397,7 +397,7 @@ impl Socks5Listener {
         &self.0.proxy_addr
     }
 
-    /// Waits for the remote process to connect to the proxy server.
+    /// Waits for the remote process to connect to the protocol server.
     ///
     /// The value of `proxy_addr` should be forwarded to the remote process
     /// before this method is called.
@@ -417,7 +417,7 @@ pub struct Socks5Datagram {
 
 impl Socks5Datagram {
     /// Creates a UDP socket bound to the specified address which will have its
-    /// traffic routed through the specified proxy.
+    /// traffic routed through the specified protocol.
     pub fn bind<T, U>(proxy: T, addr: U) -> io::Result<Socks5Datagram>
     where
         T: ToSocketAddrs,
@@ -426,8 +426,8 @@ impl Socks5Datagram {
         Self::bind_internal(proxy, addr, &Authentication::None)
     }
     /// Creates a UDP socket bound to the specified address which will have its
-    /// traffic routed through the specified proxy. The given username and password
-    /// is used to authenticate to the SOCKS proxy.
+    /// traffic routed through the specified protocol. The given username and password
+    /// is used to authenticate to the SOCKS protocol.
     pub fn bind_with_password<T, U>(
         proxy: T,
         addr: U,
@@ -447,7 +447,7 @@ impl Socks5Datagram {
         T: ToSocketAddrs,
         U: ToSocketAddrs,
     {
-        // we don't know what our IP is from the perspective of the proxy, so
+        // we don't know what our IP is from the perspective of the protocol, so
         // don't try to pass `addr` in here.
         let dst = Address::SocketAddr(SocketAddr::V4(SocketAddrV4::new(
             Ipv4Addr::new(0, 0, 0, 0),
@@ -521,7 +521,7 @@ impl Socks5Datagram {
         Ok((header.len() + overflow, addr))
     }
 
-    /// Returns the address of the proxy-side UDP socket through which all
+    /// Returns the address of the protocol-side UDP socket through which all
     /// messages will be routed.
     pub fn proxy_addr(&self) -> &Address {
         &self.stream.proxy_addr

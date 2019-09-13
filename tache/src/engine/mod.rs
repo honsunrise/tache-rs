@@ -9,7 +9,7 @@ use http::{header::HeaderValue, Request, Response, StatusCode};
 use serde::Serialize;
 use std::{env, error::Error as StdError, fmt::{self, Display}, io};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::{
     prelude::*,
     codec::{Decoder, Encoder, Framed},
@@ -21,16 +21,12 @@ use crate::{
     context::{Context, SharedContext},
 };
 
-pub(crate) mod dns_resolver;
 mod rules;
-mod http_s;
-mod sock5;
-mod redir;
-mod tun;
 
 use crate::outbound::Outbound;
 use std::net::{ToSocketAddrs, SocketAddr};
 use crate::config::ProxyConfig;
+use crate::protocol;
 
 type MODE = Vec<Box<dyn rules::Rule + Send + Sync>>;
 
@@ -174,7 +170,7 @@ async fn single_run_http(listen_address: SocketAddr) -> Result<(), Box<dyn StdEr
 
     while let Some(Ok(inbound)) = incoming.next().await {
         tokio::spawn(async move {
-            let mut transport = Framed::new(inbound, http_s::Http);
+            let mut transport = Framed::new(inbound, protocol::Http);
 
             while let Some(request) = transport.next().await {
                 let request = match request {
@@ -220,7 +216,7 @@ async fn single_run_socks(listen_address: SocketAddr) -> Result<(), Box<dyn StdE
 
     while let Some(Ok(inbound)) = incoming.next().await {
         tokio::spawn(async move {
-            let mut transport = Framed::new(inbound, http_s::Http);
+            let mut transport = Framed::new(inbound, protocol::Http);
 
             while let Some(request) = transport.next().await {
                 let request = match request {
@@ -266,7 +262,7 @@ async fn single_run_redir(listen_address: SocketAddr) -> Result<(), Box<dyn StdE
 
     while let Some(Ok(inbound)) = incoming.next().await {
         tokio::spawn(async move {
-            let mut transport = Framed::new(inbound, http_s::Http);
+            let mut transport = Framed::new(inbound, protocol::Http);
 
             while let Some(request) = transport.next().await {
                 let request = match request {
@@ -311,33 +307,31 @@ async fn single_run_tun() -> Result<(), Box<dyn StdError>> {
 }
 
 pub async fn run(config: Config) -> io::Result<()> {
+//    let mut proxies = Arc::new(HashMap::new());
+//    // setup proxies
+//    for protocol in config.proxies.iter() {
+//        match protocol {
+//            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
+//                tokio::spawn(async move {});
+//            }
+//            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
+//                tokio::spawn(async move {});
+//            }
+//            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
+//                // build protocol
+//
+//                // run protocol
+//                tokio::spawn(async move {});
+//            }
+//            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
+//                tokio::spawn(async move {});
+//            }
+//        };
+//    }
+
+    // setup rules
+
     let mut vf = Vec::new();
-    // setup proxies
-    for proxy in config.proxies.iter() {
-        match proxy {
-            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
-                tokio::spawn(async move {
-
-                });
-            }
-            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
-                tokio::spawn(async move {
-
-                });
-            }
-            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
-                tokio::spawn(async move {
-
-                });
-            }
-            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
-                tokio::spawn(async move {
-
-                });
-            }
-        };
-    }
-
     // setup inbounds
     for inbound in config.inbounds.iter() {
         match inbound {

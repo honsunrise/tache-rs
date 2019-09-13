@@ -1,10 +1,10 @@
 use super::Rule;
-use crate::proxy;
+use crate::outbound;
 
 pub struct Direct {}
 
 impl Rule for Direct {
-    fn run(&self) -> Option<Box<dyn proxy::Proxy>> {
+    fn run(&self) -> Option<Box<dyn outbound::Outbound>> {
         unimplemented!()
     }
 }
