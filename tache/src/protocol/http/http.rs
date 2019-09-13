@@ -1,6 +1,7 @@
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use futures::StreamExt;
-use http::{header::HeaderValue, Request, Response};
+use http::{header::HeaderValue, Request, Response, Uri};
+use std::collections::HashMap;
 use std::{fmt, io};
 use tokio::codec::{Decoder, Encoder};
 
@@ -64,68 +65,50 @@ impl Encoder for Http {
 /// that information to construct an instance of a `http::Request` object,
 /// trying to avoid allocations where possible.
 impl Decoder for Http {
-    type Item = Request<()>;
+    type Item = Request<Bytes>;
     type Error = io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<Request<()>>> {
-        // TODO: we should grow this headers array if parsing fails and asks
-        //       for more headers
-        let mut headers = [None; 16];
-        let (method, path, version, amt) = {
-            let mut parsed_headers = [httparse::EMPTY_HEADER; 16];
-            let mut r = httparse::Request::new(&mut parsed_headers);
-            let status = r.parse(src).map_err(|e| {
-                let msg = format!("failed to parse http request: {:?}", e);
-                io::Error::new(io::ErrorKind::Other, msg)
-            })?;
+    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<Request<Bytes>>> {
+        let mut ret = Request::builder();
+        let mut parsed_headers = [httparse::EMPTY_HEADER; 16];
+        let mut r = httparse::Request::new(&mut parsed_headers);
+        let status = r.parse(src).map_err(|e| {
+            let msg = format!("failed to parse http request: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, msg)
+        })?;
 
-            let amt = match status {
-                httparse::Status::Complete(amt) => amt,
-                httparse::Status::Partial => return Ok(None),
-            };
-
-            let to_slice = |a: &[u8]| {
-                let start = a.as_ptr() as usize - src.as_ptr() as usize;
-                assert!(start < src.len());
-                (start, start + a.len())
-            };
-
-            for (i, header) in r.headers.iter().enumerate() {
-                let k = to_slice(header.name.as_bytes());
-                let v = to_slice(header.value);
-                headers[i] = Some((k, v));
-            }
-
-            (
-                to_slice(r.method.unwrap().as_bytes()),
-                to_slice(r.path.unwrap().as_bytes()),
-                r.version.unwrap(),
-                amt,
-            )
+        let amt = match status {
+            httparse::Status::Complete(amt) => amt,
+            httparse::Status::Partial => return Ok(None),
         };
-        if version != 1 {
+
+        if r.version.unwrap() != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "only HTTP/1.1 accepted",
             ));
         }
-        let data = src.split_to(amt).freeze();
-        let mut ret = Request::builder();
-        ret.method(&data[method.0..method.1]);
-        ret.uri(data.slice(path.0, path.1));
-        ret.version(http::Version::HTTP_11);
-        for header in headers.iter() {
-            let (k, v) = match *header {
-                Some((ref k, ref v)) => (k, v),
-                None => break,
-            };
-            let value = unsafe { HeaderValue::from_shared_unchecked(data.slice(v.0, v.1)) };
-            ret.header(&data[k.0..k.1], value);
-        }
 
+        ret.version(http::Version::HTTP_11);
+        ret.method(r.method.unwrap());
+        for (i, header) in r.headers.iter().enumerate() {
+            let k = header.name.as_bytes();
+            let v = header.value;
+            ret.header(k, v);
+        }
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(ret.headers_ref().unwrap().get("host").unwrap().as_bytes())
+            .path_and_query(r.path.unwrap())
+            .build()
+            .unwrap();
+        ret.uri(uri);
+
+        let data = src.split_off(amt).freeze();
         let req = ret
-            .body(())
+            .body(data)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        src.clear();
         Ok(Some(req))
     }
 }
@@ -212,3 +195,5 @@ mod date {
         }
     }
 }
+
+fn delete_hop_by_hop_headers() {}
