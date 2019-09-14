@@ -1,3 +1,3 @@
 mod http;
 
-pub use self::http::Http;
+pub use self::http::read_http;

@@ -26,9 +26,10 @@ use std::net::{ToSocketAddrs, SocketAddr};
 use crate::config::ProxyConfig;
 use crate::protocol;
 use crate::rules;
+use tokio::io::BufReader;
 
-async fn build_connection_meta<T> (stream: &TcpStream, request: &Request<T>)
-                                   -> Result<rules::ConnectionMeta, Box<dyn Error>> {
+fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
+                                  -> Result<rules::ConnectionMeta, Box<dyn Error>> {
     let host = match request.uri().host() {
         Some(host) => host,
         None => {
@@ -54,38 +55,33 @@ async fn build_connection_meta<T> (stream: &TcpStream, request: &Request<T>)
     })
 }
 
-async fn pipe(request: Request<()>, inbound: &TcpStream, outbound: &TcpStream)
-              -> Result<(), Box<dyn Error>> {
-    Ok(())
-}
-
 async fn single_run_http(listen_address: SocketAddr) -> Result<(), Box<dyn Error>> {
     let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = incoming.next().await {
+    while let Some(Ok(mut inbound)) = incoming.next().await {
         tokio::spawn(async move {
-            let mut transport = Framed::new(inbound, protocol::Http);
+            //let mut transport = Framed::new(inbound, protocol::Http);
+            let mut inbound = BufReader::new(inbound);
+            let result = protocol::read_http(&mut inbound).await;
 
-            while let Some(request) = transport.next().await {
-                let request = match request {
-                    Ok(r) => r,
-                    Err(e) => {
-                        println!("failed to process request {}", e);
-                        return;
-                    }
-                };
+            let request = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            };
 
-                let connection_meta = match build_connection_meta(
-                    transport.get_ref(), &request).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        println!("failed to process request {}", e);
-                        return;
-                    }
-                };
+            let connection_meta = match build_connection_meta(inbound.get_ref(), &request) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            };
 
-                info!("Connection meta: {:?}", connection_meta);
+            info!("Connection meta: {:?}", connection_meta);
 
 //                let outbound = match run_rule(
 //                    transport.get_ref(), connection_meta).await {
@@ -101,7 +97,6 @@ async fn single_run_http(listen_address: SocketAddr) -> Result<(), Box<dyn Error
 //                    println!("failed to process request {}", e);
 //                    return;
 //                }
-            }
         });
     }
     Ok(())
@@ -111,8 +106,7 @@ async fn single_run_socks(listen_address: SocketAddr) -> Result<(), Box<dyn Erro
     let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = incoming.next().await {
-    }
+    while let Some(Ok(inbound)) = incoming.next().await {}
     Ok(())
 }
 
@@ -120,8 +114,7 @@ async fn single_run_redir(listen_address: SocketAddr) -> Result<(), Box<dyn Erro
     let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = incoming.next().await {
-    }
+    while let Some(Ok(inbound)) = incoming.next().await {}
     Ok(())
 }
 
