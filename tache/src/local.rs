@@ -27,9 +27,10 @@ use crate::config::ProxyConfig;
 use crate::protocol;
 use crate::rules;
 use tokio::io::BufReader;
+use crate::rules::{lookup, build_modes};
 
 fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
-                                  -> Result<rules::ConnectionMeta, Box<dyn Error>> {
+                            -> Result<rules::ConnectionMeta, Box<dyn Error>> {
     let host = match request.uri().host() {
         Some(host) => host,
         None => {
@@ -55,11 +56,14 @@ fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
     })
 }
 
-async fn single_run_http(listen_address: SocketAddr) -> Result<(), Box<dyn Error>> {
+async fn single_run_http(modes: HashMap<String, Arc<rules::MODE>>, listen_address: SocketAddr)
+                         -> Result<(), Box<dyn Error>> {
+    let modes = Arc::new(modes);
     let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
     println!("Listening on: {}", &listen_address);
 
     while let Some(Ok(mut inbound)) = incoming.next().await {
+        let modes = modes.clone();
         tokio::spawn(async move {
             //let mut transport = Framed::new(inbound, protocol::Http);
             let mut inbound = BufReader::new(inbound);
@@ -83,20 +87,22 @@ async fn single_run_http(listen_address: SocketAddr) -> Result<(), Box<dyn Error
 
             info!("Connection meta: {:?}", connection_meta);
 
-//                let outbound = match run_rule(
-//                    transport.get_ref(), connection_meta).await {
-//                    Ok(r) => r,
-//                    Err(e) => {
-//                        println!("failed to process request {}", e);
-//                        return;
-//                    }
-//                };
-//
-//                if let Err(e) = pipe(
-//                    request, transport.get_ref(), outbound).await {
-//                    println!("failed to process request {}", e);
-//                    return;
-//                }
+            let outbound = match lookup(modes["DIRECT"].clone(), &connection_meta).await {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            };
+
+            info!("Get outbound: {:?}", outbound);
+
+            match inbound.copy().await {
+                Err(e) => {
+                    println!("failed to process request {}", e);
+                    return;
+                }
+            }
         });
     }
     Ok(())
@@ -123,29 +129,31 @@ async fn single_run_tun() -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run(config: Config) -> io::Result<()> {
-//    let mut proxies = Arc::new(HashMap::new());
-//    // setup proxies
-//    for protocol in config.proxies.iter() {
-//        match protocol {
-//            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
-//                tokio::spawn(async move {});
-//            }
-//            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
-//                tokio::spawn(async move {});
-//            }
-//            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
-//                // build protocol
-//
-//                // run protocol
-//                tokio::spawn(async move {});
-//            }
-//            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
-//                tokio::spawn(async move {});
-//            }
-//        };
-//    }
+    let mut proxies = Arc::new(HashMap::new());
+    // setup proxies
+    for protocol in config.proxies.iter() {
+        match protocol {
+            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
+                tokio::spawn(async move {});
+            }
+            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
+                tokio::spawn(async move {});
+            }
+            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
+                // build protocol
+
+                // run protocol
+                tokio::spawn(async move {});
+            }
+            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
+                tokio::spawn(async move {});
+            }
+        };
+    }
 
     // setup rules
+    let modes = build_modes(&config)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
 
     let mut vf = Vec::new();
     // setup inbounds
@@ -153,7 +161,7 @@ pub async fn run(config: Config) -> io::Result<()> {
         match inbound {
             InboundConfig::HTTP { name: _, listen, authentication: _ } => {
                 for addr in listen.to_socket_addrs()? {
-                    let fut = single_run_http(addr);
+                    let fut = single_run_http(modes.clone(), addr);
                     vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
                 }
             }
