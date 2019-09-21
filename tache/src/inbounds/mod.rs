@@ -1,4 +1,4 @@
-mod http;
-mod redir;
-mod socks;
-mod tun;
+pub mod http;
+pub mod redir;
+pub mod socks;
+pub mod tun;

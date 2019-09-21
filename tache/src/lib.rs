@@ -6,19 +6,15 @@
 /// ShadowSocks version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use self::{
-    config::{Config, Mode},
-    local::run,
-};
+pub use self::config::*;
 
 // relay::{dns::run as run_dns},
 
 mod config;
 mod context;
 mod dns_resolver;
-mod inbounds;
-mod local;
+pub mod inbounds;
 mod outbound;
 mod protocol;
-mod rules;
+pub mod rules;
 mod utils;

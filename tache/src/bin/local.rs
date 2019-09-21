@@ -4,19 +4,15 @@
 //! or you could specify a configuration file. The format of configuration file is defined
 //! in mod `config`.
 
-use std::{io::Result as IoResult, net::SocketAddr, process};
-
+use actix::prelude::*;
 use clap::{App, Arg};
-use futures::{
-    future::{select, Either},
-    prelude::*,
-    Future,
-};
+use futures::{future::Either, prelude::*};
 use log::{debug, error, info};
-use tokio::net::signal;
-use tokio::runtime::Runtime;
+use std::io;
+use std::{future::Future, io::Result, net::SocketAddr, process};
+use tokio::prelude::*;
 
-use tache::{run, Config, Mode};
+use tache::{inbounds::http, rules, Config, InboundConfig, Mode};
 
 mod logging;
 
@@ -41,7 +37,7 @@ fn main() {
 
     let debug_level = matches.occurrences_of("VERBOSE");
 
-    logging::init(true, debug_level, "tachelocal");
+    logging::init(true, debug_level, "tache");
 
     let mut config = match matches.value_of("CONFIG") {
         Some(config_path) => match Config::load_from_file(config_path) {
@@ -67,22 +63,75 @@ fn main() {
     }
 }
 
-fn launch_server(config: Config) -> IoResult<()> {
-    let runtime = Runtime::new().expect("Creating runtime");
+fn launch_server(config: Config) -> Result<()> {
+    let system = actix::System::new("local");
 
-    let abort_signal = signal::ctrl_c()?;
+    //    let mut proxies = Arc::new(HashMap::new());
+    //    // setup proxies
+    //    for protocol in config.proxies.iter() {
+    //        match protocol {
+    //            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
+    //                tokio::spawn(async move {});
+    //            }
+    //            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
+    //                tokio::spawn(async move {});
+    //            }
+    //            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
+    //                // build protocol
+    //
+    //                // run protocol
+    //                tokio::spawn(async move {});
+    //            }
+    //            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
+    //                tokio::spawn(async move {});
+    //            }
+    //        };
+    //    }
 
-    let result = runtime.block_on(select(
-        Box::pin(run(config)),
-        Box::pin(abort_signal.into_future()),
-    ));
+    // setup rules
+    let modes = rules::build_modes(&config)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
 
-    runtime.shutdown_now();
-
-    match result {
-        // Server future resolved without an error. This should never happen.
-        Either::Left(_) => panic!("Server exited unexpectedly"),
-        // The abort signal future resolved. Means we should just exit.
-        Either::Right(..) => Ok(()),
+    // setup inbounds
+    for inbound in config.inbounds.iter() {
+        match inbound {
+            InboundConfig::HTTP {
+                name: _,
+                listen,
+                authentication: _,
+            } => {
+                http::setup_http_inbounds()?;
+            }
+            InboundConfig::Socks5 {
+                name: _,
+                listen,
+                authentication: _,
+            } => {}
+            InboundConfig::Redir {
+                name: _,
+                listen,
+                authentication: _,
+            } => {}
+            InboundConfig::TUN { name: _ } => {}
+        };
     }
+
+    system.run()
+    //    let runtime = Runtime::new().expect("Creating runtime");
+    //
+    //    let abort_signal = signal::ctrl_c()?;
+    //
+    //    let result = runtime.block_on(select(
+    //        Box::pin(run(config)),
+    //        Box::pin(abort_signal.into_future()),
+    //    ));
+    //
+    //    runtime.shutdown_now();
+    //
+    //    match result {
+    //        // Server future resolved without an error. This should never happen.
+    //        Either::Left(_) => panic!("Server exited unexpectedly"),
+    //        // The abort signal future resolved. Means we should just exit.
+    //        Either::Right(..) => Ok(()),
+    //    }
 }

@@ -3,9 +3,10 @@
 use std::{
     io::{self, ErrorKind},
     net::SocketAddr,
+    future::Future
 };
 
-use tokio::{self, future::Future};
+use tokio;
 use trust_dns_resolver::{config::ResolverConfig, Resolver};
 
 use crate::context::SharedContext;

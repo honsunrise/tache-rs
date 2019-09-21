@@ -1,9 +1,10 @@
+pub use direct::Direct;
+
 use std::io;
 use std::net::ToSocketAddrs;
 use tokio::net::{TcpStream, UdpSocket};
 
 mod direct;
-mod fallback;
 mod socks5;
 
 pub trait Outbound<T>
