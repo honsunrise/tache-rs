@@ -1,3 +1,4 @@
+mod http;
 mod shadowsocks;
 mod vmess;
 

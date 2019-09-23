@@ -9,6 +9,7 @@ use actix_web::client::Client;
 use actix_web::dev::{ServiceRequest, ServiceResponse};
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use futures::future;
+use futures::prelude::*;
 use log::{debug, error, info};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 
@@ -37,45 +38,10 @@ fn build_connection_meta<T>(
     })
 }
 
-struct Hijack {}
-
-impl Service for Hijack {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
-    type Error = Error;
-    type Future = future::FutureResult<Self::Response, Self::Error>;
-
-    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
-        unimplemented!()
-    }
-
-    fn call(&mut self, req: Self::Request) -> Self::Future {
-        unimplemented!()
-    }
-}
-
-impl NewService for Hijack {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
-    type Error = Error;
-    type Config = ();
-    type Service = Self;
-    type InitError = ();
-    type Future = future::FutureResult<Self::Service, Self::InitError>;
-
-    fn new_service(&self, cfg: &Self::Config) -> Self::Future {
-        unimplemented!()
-    }
-}
-
 pub fn setup_http_inbounds() -> std::io::Result<()> {
-    HttpServer::new(move || {
-        App::new()
-            .wrap(middleware::Logger::default())
-            .default_service(Hijack {})
-    })
-    .bind("127.0.0.1:59090")?
-    .start();
+    HttpServer::new(move || App::new().wrap(middleware::Logger::default()))
+        .bind("127.0.0.1:59090")?
+        .start();
     Ok(())
 }
 
