@@ -4,9 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{fmt, io, net};
 
+use crate::protocol::http::service::TimerKind::SlowRequest;
 use actix::prelude::*;
+use actix_http::body::{Body, ResponseBody};
 use actix_http::error::ParseError;
-use actix_http::h1::Codec;
+use actix_http::h1::{Codec, Message, MessageType};
 use actix_http::{KeepAlive, Request, ServiceConfig};
 use actix_server::{Server, ServerBuilder};
 use actix_server_config::{Io as ServerIo, IoStream, Protocol, ServerConfig as SrvConfig};
@@ -20,14 +22,17 @@ use net2::TcpBuilder;
 use tokio::codec::Decoder;
 use tokio::timer::Delay;
 
+const LW_BUFFER_SIZE: usize = 4096;
+const HW_BUFFER_SIZE: usize = 32_768;
+
 bitflags! {
     pub struct Flags: u8 {
         const STARTED            = 0b0000_0001;
         const KEEPALIVE          = 0b0000_0010;
         const POLLED             = 0b0000_0100;
         const SHUTDOWN           = 0b0000_1000;
-        const READ_DISCONNECT    = 0b0001_0000;
-        const WRITE_DISCONNECT   = 0b0010_0000;
+        const READHALF_CLOSED    = 0b0001_0000;
+        const WRITEHALF_CLOSED   = 0b0010_0000;
         const UPGRADE            = 0b0100_0000;
     }
 }
@@ -176,13 +181,19 @@ where
     }
 }
 
+enum TimerKind {
+    SlowRequest(Delay),
+    HttpKeepalive(Delay),
+    Shutdown(Delay),
+}
+
 struct HttpServiceHandlerResponse<T, S> {
     cfg: ServiceConfig,
     io: T,
     read_buf: BytesMut,
     flags: Flags,
-    ka_expire: Instant,
-    ka_timer: Option<Delay>,
+    shutdown: bool,
+    timer: Option<TimerKind>,
     codec: Codec,
     write_buf: BytesMut,
     _t: PhantomData<(T, S)>,
@@ -196,42 +207,26 @@ where
     S::Future: 'static,
 {
     fn new(cfg: ServiceConfig, io: T, srv: S) -> Self {
-        let keepalive = config.keep_alive_enabled();
-        let flags = if keepalive {
-            Flags::KEEPALIVE
+        // timer
+        if let Some(delay) = cfg.client_timer() {
+            Some(SlowRequest(delay))
+        } else if let Some(delay) = cfg.keep_alive_timer() {
+            Some(SlowRequest(delay))
         } else {
-            Flags::empty()
-        };
-
-        // keep-alive timer
-        let (ka_expire, ka_timer) = if let Some(delay) = timeout {
-            (delay.deadline(), Some(delay))
-        } else if let Some(delay) = config.keep_alive_timer() {
-            (delay.deadline(), Some(delay))
-        } else {
-            (config.now(), None)
+            None
         };
 
         HttpServiceHandlerResponse {
             cfg,
             io,
             read_buf: BytesMut::with_capacity(4096),
-            flags,
-            ka_expire,
-            ka_timer,
+            flags: Flags::empty(),
+            shutdown: false,
+            timer,
             codec: Codec::new(config.clone()),
             write_buf: BytesMut::with_capacity(4096),
             _t: PhantomData,
         }
-    }
-
-    fn can_read(&self) -> bool {
-        !self.flags.intersects(Flags::READ_DISCONNECT)
-    }
-
-    fn client_disconnected(&mut self) {
-        self.flags
-            .insert(Flags::READ_DISCONNECT | Flags::WRITE_DISCONNECT);
     }
 
     fn handle_request(&mut self, req: Request) -> Result<State<S, B, X>, Error> {
@@ -251,181 +246,7 @@ where
         }
     }
 
-    /// Process one incoming requests
-    pub(self) fn poll_request(&mut self) -> Result<bool, Error> {
-        // limit a mount of non processed requests
-        if self.messages.len() >= MAX_PIPELINED_MESSAGES || !self.can_read() {
-            return Ok(false);
-        }
-
-        let mut updated = false;
-        loop {
-            match self.codec.decode(&mut self.read_buf) {
-                Ok(Some(msg)) => {
-                    updated = true;
-                    self.flags.insert(Flags::STARTED);
-
-                    match msg {
-                        Message::Item(mut req) => {
-                            let pl = self.codec.message_type();
-                            req.head_mut().peer_addr = self.peer_addr;
-
-                            // set on_connect data
-                            if let Some(ref on_connect) = self.on_connect {
-                                on_connect.set(&mut req.extensions_mut());
-                            }
-
-                            if pl == MessageType::Stream && self.upgrade.is_some() {
-                                self.messages.push_back(DispatcherMessage::Upgrade(req));
-                                break;
-                            }
-                            if pl == MessageType::Payload || pl == MessageType::Stream {
-                                let (ps, pl) = Payload::create(false);
-                                let (req1, _) = req.replace_payload(crate::Payload::H1(pl));
-                                req = req1;
-                                self.payload = Some(ps);
-                            }
-
-                            // handle request early
-                            if self.state.is_empty() {
-                                self.state = self.handle_request(req)?;
-                            } else {
-                                self.messages.push_back(DispatcherMessage::Item(req));
-                            }
-                        }
-                        Message::Chunk(Some(chunk)) => {
-                            if let Some(ref mut payload) = self.payload {
-                                payload.feed_data(chunk);
-                            } else {
-                                error!("Internal server error: unexpected payload chunk");
-                                self.flags.insert(Flags::READ_DISCONNECT);
-                                self.messages.push_back(DispatcherMessage::Error(
-                                    Response::InternalServerError().finish().drop_body(),
-                                ));
-                                self.error = Some(DispatchError::InternalError);
-                                break;
-                            }
-                        }
-                        Message::Chunk(None) => {
-                            if let Some(mut payload) = self.payload.take() {
-                                payload.feed_eof();
-                            } else {
-                                error!("Internal server error: unexpected eof");
-                                self.flags.insert(Flags::READ_DISCONNECT);
-                                self.messages.push_back(DispatcherMessage::Error(
-                                    Response::InternalServerError().finish().drop_body(),
-                                ));
-                                self.error = Some(DispatchError::InternalError);
-                                break;
-                            }
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(ParseError::Io(e)) => {
-                    self.client_disconnected();
-                    self.error = Some(DispatchError::Io(e));
-                    break;
-                }
-                Err(e) => {
-                    if let Some(mut payload) = self.payload.take() {
-                        payload.set_error(PayloadError::EncodingCorrupted);
-                    }
-
-                    // Malformed requests should be responded with 400
-                    self.messages.push_back(DispatcherMessage::Error(
-                        Response::BadRequest().finish().drop_body(),
-                    ));
-                    self.flags.insert(Flags::READ_DISCONNECT);
-                    self.error = Some(e.into());
-                    break;
-                }
-            }
-        }
-
-        if updated && self.ka_timer.is_some() {
-            if let Some(expire) = self.codec.config().keep_alive_expire() {
-                self.ka_expire = expire;
-            }
-        }
-        Ok(updated)
-    }
-
-    /// keep-alive timer
-    fn poll_keepalive(&mut self) -> Result<(), DispatchError> {
-        if self.ka_timer.is_none() {
-            // shutdown timeout
-            if self.flags.contains(Flags::SHUTDOWN) {
-                if let Some(interval) = self.codec.config().client_disconnect_timer() {
-                    self.ka_timer = Some(Delay::new(interval));
-                } else {
-                    self.flags.insert(Flags::READ_DISCONNECT);
-                    if let Some(mut payload) = self.payload.take() {
-                        payload.set_error(PayloadError::Incomplete(None));
-                    }
-                    return Ok(());
-                }
-            } else {
-                return Ok(());
-            }
-        }
-
-        match self.ka_timer.as_mut().unwrap().poll().map_err(|e| {
-            error!("Timer error {:?}", e);
-            DispatchError::Unknown
-        })? {
-            Async::Ready(_) => {
-                // if we get timeout during shutdown, drop connection
-                if self.flags.contains(Flags::SHUTDOWN) {
-                    return Err(DispatchError::DisconnectTimeout);
-                } else if self.ka_timer.as_mut().unwrap().deadline() >= self.ka_expire {
-                    // check for any outstanding tasks
-                    if self.state.is_empty() && self.write_buf.is_empty() {
-                        if self.flags.contains(Flags::STARTED) {
-                            trace!("Keep-alive timeout, close connection");
-                            self.flags.insert(Flags::SHUTDOWN);
-
-                            // start shutdown timer
-                            if let Some(deadline) = self.codec.config().client_disconnect_timer() {
-                                if let Some(timer) = self.ka_timer.as_mut() {
-                                    timer.reset(deadline);
-                                    let _ = timer.poll();
-                                }
-                            } else {
-                                // no shutdown timeout, drop socket
-                                self.flags.insert(Flags::WRITE_DISCONNECT);
-                                return Ok(());
-                            }
-                        } else {
-                            // timeout on first request (slow request) return 408
-                            if !self.flags.contains(Flags::STARTED) {
-                                trace!("Slow request timeout");
-                                let _ = self.send_response(
-                                    Response::RequestTimeout().finish().drop_body(),
-                                    ResponseBody::Other(Body::Empty),
-                                );
-                            } else {
-                                trace!("Keep-alive connection timeout");
-                            }
-                            self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
-                            self.state = State::None;
-                        }
-                    } else if let Some(deadline) = self.codec.config().keep_alive_expire() {
-                        if let Some(timer) = self.ka_timer.as_mut() {
-                            timer.reset(deadline);
-                            let _ = timer.poll();
-                        }
-                    }
-                } else if let Some(timer) = self.ka_timer.as_mut() {
-                    timer.reset(self.ka_expire);
-                    let _ = timer.poll();
-                }
-            }
-            Async::NotReady => (),
-        }
-
-        Ok(())
-    }
+    fn poll_flush(&mut self) -> Poll<(), Error> {}
 }
 
 impl<T, S> Future for HttpServiceHandlerResponse<T, S>
@@ -439,92 +260,91 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.poll_keepalive()?;
+        if !self.shutdown {
+            // read socket into a buf
+            let should_disconnect = read_available(&mut io, &mut self.read_buf)?;
 
-        if self.flags.contains(Flags::SHUTDOWN) {
-            if self.flags.contains(Flags::WRITE_DISCONNECT) {
-                Ok(Async::Ready(()))
-            } else {
-                // flush buffer
-                self.poll_flush()?;
-                if !self.write_buf.is_empty() {
-                    Ok(Async::NotReady)
-                } else {
-                    match self.io.shutdown()? {
-                        Async::Ready(_) => Ok(Async::Ready(())),
-                        Async::NotReady => Ok(Async::NotReady),
+            if should_disconnect {
+                self.flags.insert(Flags::READHALF_CLOSED);
+            };
+
+            // process request
+            loop {
+                match self.codec.decode(&mut self.read_buf) {
+                    Ok(Some(mut req)) => {
+                        let pl = self.codec.message_type();
+                        req.head_mut().peer_addr = self.io.peer_addr();
+                        self.handle_request(req)?;
+
+                        // update timer for keepalive
+                        if let Some(TimerKind::HttpKeepalive(timer)) = self.timer.as_mut() {
+                            if let Some(deadline) = self.codec.config().keep_alive_expire() {
+                                timer.reset(deadline);
+                            }
+                        } else if let Some(timer) = self.cfg.keep_alive_timer() {
+                            self.timer = Some(TimerKind::HttpKeepalive(timer))
+                        } else {
+                            self.timer = None;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        //TODO: send bad request
+                        self.flags.insert(Flags::READHALF_CLOSED);
+                        break;
                     }
                 }
             }
+        // process response
         } else {
-            // read socket into a buf
-            let should_disconnect = if !self.flags.contains(Flags::READ_DISCONNECT) {
-                read_available(&mut io, &mut self.read_buf)?
-            } else {
-                None
+            try_ready!(self.poll_flush());
+            return match self.io.shutdown()? {
+                Async::Ready(_) => Ok(Async::Ready(())),
+                Async::NotReady => Ok(Async::NotReady),
             };
+        }
 
-            self.poll_request()?;
-            if let Some(true) = should_disconnect {
-                self.flags.insert(Flags::READ_DISCONNECT);
-                if let Some(mut payload) = self.payload.take() {
-                    payload.feed_eof();
+        // process timer
+        match self.timer.as_mut() {
+            Some(TimerKind::SlowRequest(timer)) => match timer.poll()? {
+                Async::Ready(_) => {
+                    trace!("Slow request timeout");
+                    let _ = self.send_response(
+                        Response::RequestTimeout().finish().drop_body(),
+                        ResponseBody::Other(Body::Empty),
+                    );
+                    self.shutdown = true;
                 }
-            };
+                Async::NotReady => (),
+            },
+            Some(TimerKind::HttpKeepalive(timer)) => match timer.poll()? {
+                Async::Ready(_) => {
+                    trace!("Keep-alive timeout, close connection");
+                    self.shutdown = true;
 
-            loop {
-                if self.write_buf.remaining_mut() < LW_BUFFER_SIZE {
-                    self.write_buf.reserve(HW_BUFFER_SIZE);
+                    // start shutdown timer if exist
+                    if let Some(deadline) = self.codec.config().client_disconnect_timer() {
+                        self.timer = Some(TimerKind::Shutdown(Delay::new(deadline)));
+                    }
                 }
-                let result = self.poll_response()?;
-                let drain = result == PollResponse::DrainWriteBuf;
-
-                // we didnt get WouldBlock from write operation,
-                // so data get written to kernel completely (OSX)
-                // and we have to write again otherwise response can get stuck
-                if self.poll_flush()? || !drain {
-                    break;
+                Async::NotReady => (),
+            },
+            Some(TimerKind::Shutdown(timer)) => match timer.poll()? {
+                Async::Ready(_) => {
+                    return Err(DispatchError::DisconnectTimeout);
                 }
-            }
-
-            // client is gone
-            if self.flags.contains(Flags::WRITE_DISCONNECT) {
-                return Ok(Async::Ready(()));
-            }
-
-            let is_empty = self.state.is_empty();
-
-            // read half is closed and we do not processing any responses
-            if self.flags.contains(Flags::READ_DISCONNECT) && is_empty {
-                self.flags.insert(Flags::SHUTDOWN);
-            }
-
-            // keep-alive and stream errors
-            if is_empty && self.write_buf.is_empty() {
-                if let Some(err) = self.error.take() {
-                    Err(err)
-                }
-                // disconnect if keep-alive is not enabled
-                else if self.flags.contains(Flags::STARTED)
-                    && !self.flags.intersects(Flags::KEEPALIVE)
-                {
-                    self.flags.insert(Flags::SHUTDOWN);
-                    self.poll()
-                }
-                // disconnect if shutdown
-                else if self.flags.contains(Flags::SHUTDOWN) {
-                    self.poll()
-                } else {
-                    Ok(Async::NotReady)
-                }
-            } else {
-                Ok(Async::NotReady)
+                Async::NotReady => (),
+            },
+            None => {
+                // noting to do
             }
         }
+
+        Ok(Async::NotReady)
     }
 }
 
-fn read_available<T>(io: &mut T, buf: &mut BytesMut) -> Result<Option<bool>, io::Error>
+fn read_available<T>(io: &mut T, buf: &mut BytesMut) -> Result<bool, io::Error>
 where
     T: io::Read,
 {
@@ -538,7 +358,7 @@ where
         match read {
             Ok(n) => {
                 if n == 0 {
-                    return Ok(Some(true));
+                    return Ok(true);
                 } else {
                     read_some = true;
                     unsafe {
@@ -548,13 +368,9 @@ where
             }
             Err(e) => {
                 return if e.kind() == io::ErrorKind::WouldBlock {
-                    if read_some {
-                        Ok(Some(false))
-                    } else {
-                        Ok(None)
-                    }
+                    Ok(false)
                 } else if e.kind() == io::ErrorKind::ConnectionReset && read_some {
-                    Ok(Some(true))
+                    Ok(true)
                 } else {
                     Err(e)
                 };
