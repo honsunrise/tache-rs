@@ -1,18 +1,17 @@
 use std::io;
-use std::net::ToSocketAddrs;
+use std::net::SocketAddr;
 use tokio::net::{TcpStream, UdpSocket};
 
 mod direct;
 mod fallback;
 mod socks5;
 
-pub trait Outbound<T>
-where
-    T: ToSocketAddrs,
-{
+pub trait Outbound {
     fn name(&self) -> String;
     fn udp(&self) -> bool;
-    fn dial(&self, addr: T) -> io::Result<TcpStream>;
-    fn bind(&self, addr: T) -> io::Result<UdpSocket>;
+    fn dial(&self, addr: SocketAddr) -> io::Result<TcpStream>;
+    fn bind(&self, addr: SocketAddr) -> io::Result<UdpSocket>;
     fn alive(&self) -> bool;
 }
+
+pub use direct::Direct;

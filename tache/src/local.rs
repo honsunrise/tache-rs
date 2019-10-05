@@ -1,10 +1,6 @@
 use log::{debug, error, info};
 use bytes::BytesMut;
-use futures::{
-    SinkExt,
-    StreamExt,
-    future::{select_all, BoxFuture},
-};
+use futures::future::{select_all, BoxFuture, select, Either};
 use http::{header::HeaderValue, Request, Response, StatusCode};
 use serde::Serialize;
 use std::{env, error::Error, fmt::{self, Display}, io};
@@ -21,13 +17,14 @@ use crate::{
     context::{Context, SharedContext},
 };
 
-use crate::outbound::Outbound;
+use crate::outbound::{self, Outbound};
 use std::net::{ToSocketAddrs, SocketAddr};
 use crate::config::ProxyConfig;
 use crate::protocol;
 use crate::rules;
 use tokio::io::BufReader;
 use crate::rules::{lookup, build_modes};
+use trust_dns_resolver::proto::error::ProtoErrorKind::NoError;
 
 fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
                             -> Result<rules::ConnectionMeta, Box<dyn Error>> {
@@ -56,7 +53,9 @@ fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
     })
 }
 
-async fn single_run_http(modes: HashMap<String, Arc<rules::MODE>>, listen_address: SocketAddr)
+async fn single_run_http(listen_address: SocketAddr,
+                         modes: HashMap<String, Arc<rules::MODE>>,
+                         proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>)
                          -> Result<(), Box<dyn Error>> {
     let modes = Arc::new(modes);
     let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
@@ -64,6 +63,7 @@ async fn single_run_http(modes: HashMap<String, Arc<rules::MODE>>, listen_addres
 
     while let Some(Ok(mut inbound)) = incoming.next().await {
         let modes = modes.clone();
+        let proxies = proxies.clone();
         tokio::spawn(async move {
             //let mut transport = Framed::new(inbound, protocol::Http);
             let mut inbound = BufReader::new(inbound);
@@ -97,12 +97,29 @@ async fn single_run_http(modes: HashMap<String, Arc<rules::MODE>>, listen_addres
 
             info!("Get outbound: {:?}", outbound);
 
-            match inbound.copy().await {
-                Err(e) => {
-                    println!("failed to process request {}", e);
+            let outbound = match proxies.get(outbound.as_str()) {
+                Some(r) => r,
+                None => {
+                    println!("failed to get outbound {}", outbound);
                     return;
                 }
-            }
+            };
+            let mut outbound = match outbound.dial(connection_meta.dst_addr.unwrap()) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("failed to dial to dst address {}", e);
+                    return;
+                }
+            };
+
+            let (mut lr, mut lw) = inbound.get_mut().split();
+            let (mut rr, mut rw) = outbound.split();
+
+            match select(lr.copy(&mut rw), rr.copy(&mut lw)).await {
+                Either::Left(r) | Either::Right(r) => {
+
+                },
+            };
         });
     }
     Ok(())
@@ -129,7 +146,7 @@ async fn single_run_tun() -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run(config: Config) -> io::Result<()> {
-    let mut proxies = Arc::new(HashMap::new());
+    let mut proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>> = HashMap::new();
     // setup proxies
     for protocol in config.proxies.iter() {
         match protocol {
@@ -148,6 +165,9 @@ pub async fn run(config: Config) -> io::Result<()> {
             ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
                 tokio::spawn(async move {});
             }
+            ProxyConfig::Direct { name } => {
+                proxies.insert(*name, Arc::new(Box::new(outbound::Direct { name: *name })));
+            }
         };
     }
 
@@ -161,7 +181,7 @@ pub async fn run(config: Config) -> io::Result<()> {
         match inbound {
             InboundConfig::HTTP { name: _, listen, authentication: _ } => {
                 for addr in listen.to_socket_addrs()? {
-                    let fut = single_run_http(modes.clone(), addr);
+                    let fut = single_run_http(addr, modes.clone(), proxies.clone());
                     vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
                 }
             }

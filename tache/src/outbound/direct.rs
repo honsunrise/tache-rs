@@ -8,10 +8,7 @@ pub struct Direct {
     name: String,
 }
 
-impl<T> Outbound<T> for Direct
-where
-    T: ToSocketAddrs,
-{
+impl Outbound for Direct {
     fn name(&self) -> String {
         self.name.to_owned()
     }
@@ -20,7 +17,7 @@ where
         true
     }
 
-    fn dial(&self, addr: T) -> io::Result<TcpStream> {
+    fn dial(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         let socket_addr = addr.to_socket_addrs()?;
         let mut stream = TcpStream::connect(socket_addr).await?;
         stream.set_keepalive(Some(Duration::from_secs(30)))?;
@@ -28,7 +25,7 @@ where
         Ok(stream)
     }
 
-    fn bind(&self, addr: T) -> io::Result<UdpSocket> {
+    fn bind(&self, addr: SocketAddr) -> io::Result<UdpSocket> {
         let socket_addr = addr.to_socket_addrs()?;
         let local_addr = SocketAddr::new(IpAddr::from(Ipv4Addr::new(0, 0, 0, 0)), 0);
         let mut remote_udp = UdpSocket::bind(&local_addr)?;
@@ -37,6 +34,6 @@ where
     }
 
     fn alive(&self) -> bool {
-        true;
+        true
     }
 }

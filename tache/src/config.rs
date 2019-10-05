@@ -278,6 +278,9 @@ pub enum ProxyConfig {
         tls: Option<bool>,
         skip_cert_verify: Option<bool>,
     },
+    Direct {
+        name: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
