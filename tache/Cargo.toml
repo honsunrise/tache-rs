@@ -40,8 +40,9 @@ http-body = "0.2.0-alpha.1"
 tokio = { version = "0.2.0-alpha.6", features = ["default", "signal"] }
 bytes = "0.4"
 num_cpus = "1.8.0"
-futures-preview = "0.3.0-alpha.18"
-futures-util-preview = "0.3.0-alpha.18"
+async-trait = "0.1.13"
+futures-preview = { version = "0.3.0-alpha.19"}
+futures-util-preview = "0.3.0-alpha.19"
 httparse = "1.0"
 lru-cache = "0.1"
 dns-parser = "0.8"

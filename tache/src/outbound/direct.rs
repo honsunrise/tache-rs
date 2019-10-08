@@ -1,4 +1,6 @@
+use async_trait::async_trait;
 use crate::outbound::Outbound;
+use futures::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
@@ -8,32 +10,39 @@ pub struct Direct {
     name: String,
 }
 
+impl Direct {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+        }
+    }
+}
+
+#[async_trait]
 impl Outbound for Direct {
     fn name(&self) -> String {
         self.name.to_owned()
     }
 
-    fn udp(&self) -> bool {
+    async fn udp(&self) -> bool {
         true
     }
 
-    fn dial(&self, addr: SocketAddr) -> io::Result<TcpStream> {
-        let socket_addr = addr.to_socket_addrs()?;
-        let mut stream = TcpStream::connect(socket_addr).await?;
+    async fn dial(&self, addr: SocketAddr) -> io::Result<TcpStream> {
+        let mut stream = TcpStream::connect(addr).await?;
         stream.set_keepalive(Some(Duration::from_secs(30)))?;
         stream.set_nodelay(true)?;
         Ok(stream)
     }
 
-    fn bind(&self, addr: SocketAddr) -> io::Result<UdpSocket> {
-        let socket_addr = addr.to_socket_addrs()?;
+    async fn bind(&self, addr: SocketAddr) -> io::Result<UdpSocket> {
         let local_addr = SocketAddr::new(IpAddr::from(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut remote_udp = UdpSocket::bind(&local_addr)?;
-        remote_udp.connect(socket_addr)?;
+        let mut remote_udp = UdpSocket::bind(&local_addr).await?;
+        remote_udp.connect(addr).await?;
         Ok(remote_udp)
     }
 
-    fn alive(&self) -> bool {
+    async fn alive(&self) -> bool {
         true
     }
 }

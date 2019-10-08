@@ -104,7 +104,7 @@ async fn single_run_http(listen_address: SocketAddr,
                     return;
                 }
             };
-            let mut outbound = match outbound.dial(connection_meta.dst_addr.unwrap()) {
+            let mut outbound = match outbound.dial(connection_meta.dst_addr.unwrap()).await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("failed to dial to dst address {}", e);
@@ -166,7 +166,7 @@ pub async fn run(config: Config) -> io::Result<()> {
                 tokio::spawn(async move {});
             }
             ProxyConfig::Direct { name } => {
-                proxies.insert(*name, Arc::new(Box::new(outbound::Direct { name: *name })));
+                proxies.insert(name.to_owned(), Arc::new(Box::new(outbound::Direct::new(name))));
             }
         };
     }
