@@ -18,17 +18,12 @@ use std::{
 use async_std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs,
 };
-use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
-use bytes::Bytes;
-use json5;
-use log::{error, trace};
+
 use serde::{
     de::{self, Deserialize, Deserializer, Visitor},
-    ser::{self, Serialize, Serializer},
+    ser::{Serialize, Serializer},
     *,
 };
-use serde_urlencoded;
-use trust_dns_resolver::config::{NameServerConfigGroup, ResolverConfig};
 
 #[derive(Clone, Debug)]
 pub struct DomainName(pub String, pub u16);

@@ -1,34 +1,34 @@
-use std::{env, error::Error, fmt::{self, Display}};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::{
+    env,
+    error::Error,
+    fmt::{self, Display},
+};
 
 use async_std::{
     io::{self, BufReader},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     prelude::*,
-    future,
     task,
 };
-use bytes::BytesMut;
-use futures::future::{BoxFuture, Either, select, select_all};
-use http::{header::HeaderValue, Request, Response, StatusCode};
-use log::{debug, error, info};
-use serde::Serialize;
-use trust_dns_resolver::proto::error::ProtoErrorKind::NoError;
 
-use crate::{
-    config::{Config, InboundConfig},
-    context::{Context, SharedContext},
-};
+use futures::future::{select, select_all, BoxFuture, Either};
+use http::{header::HeaderValue, Request, Response, StatusCode};
+use log::{error, info};
+
 use crate::config::ProxyConfig;
+use crate::config::{Config, InboundConfig};
 use crate::outbound::{self, Outbound};
 use crate::protocol;
 use crate::rules;
 use crate::rules::{build_modes, lookup};
 use crate::utils::Address;
 
-async fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
-                                  -> Result<rules::ConnectionMeta, Box<dyn Error>> {
+async fn build_connection_meta<T>(
+    stream: &TcpStream,
+    request: &Request<T>,
+) -> Result<rules::ConnectionMeta, Box<dyn Error>> {
     let host = match request.uri().host() {
         Some(host) => host,
         None => {
@@ -38,12 +38,12 @@ async fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
 
     let dst_addr = match host.to_socket_addrs().await {
         Ok(mut addrs) => addrs.next(),
-        Err(e) => None
+        Err(_e) => None,
     };
 
     let src_addr = match stream.peer_addr() {
         Ok(addr) => Some(addr),
-        Err(e) => None
+        Err(_e) => None,
     };
 
     Ok(rules::ConnectionMeta {
@@ -54,10 +54,11 @@ async fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
     })
 }
 
-async fn single_run_http(listen_address: SocketAddr,
-                         modes: HashMap<String, Arc<rules::MODE>>,
-                         proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>)
-                         -> Result<(), Box<dyn Error>> {
+async fn single_run_http(
+    listen_address: SocketAddr,
+    modes: HashMap<String, Arc<rules::MODE>>,
+    proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>,
+) -> Result<(), Box<dyn Error>> {
     let modes = Arc::new(modes);
     let listen = TcpListener::bind(&listen_address).await?;
     println!("Listening on: {}", &listen_address);
@@ -117,8 +118,12 @@ async fn single_run_http(listen_address: SocketAddr,
             let (l_reader, l_writer) = &mut (inbound, inbound);
             let (r_reader, r_writer) = &mut (&outbound, &outbound);
 
-            match select(Box::pin(io::copy(l_reader, r_writer)),
-                         Box::pin(io::copy(r_reader, l_writer))).await {
+            match select(
+                Box::pin(io::copy(l_reader, r_writer)),
+                Box::pin(io::copy(r_reader, l_writer)),
+            )
+            .await
+            {
                 Either::Left(r) | Either::Right(r) => {}
             };
         });
@@ -126,16 +131,17 @@ async fn single_run_http(listen_address: SocketAddr,
     Ok(())
 }
 
-async fn single_run_socks(listen_address: SocketAddr,
-                          modes: HashMap<String, Arc<rules::MODE>>,
-                          proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>)
-                          -> Result<(), Box<dyn Error>> {
+async fn single_run_socks(
+    listen_address: SocketAddr,
+    modes: HashMap<String, Arc<rules::MODE>>,
+    proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>,
+) -> Result<(), Box<dyn Error>> {
     let listen = TcpListener::bind(&listen_address).await?;
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = listen.incoming().next().await {
-        let modes = modes.clone();
-        let proxies = proxies.clone();
+    while let Some(Ok(_inbound)) = listen.incoming().next().await {
+        let _modes = modes.clone();
+        let _proxies = proxies.clone();
         task::spawn(async move {});
     }
     Ok(())
@@ -145,7 +151,7 @@ async fn single_run_redir(listen_address: SocketAddr) -> Result<(), Box<dyn Erro
     let listen = TcpListener::bind(&listen_address).await?;
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = listen.incoming().next().await {}
+    while let Some(Ok(_inbound)) = listen.incoming().next().await {}
     Ok(())
 }
 
@@ -158,83 +164,119 @@ pub async fn run(config: Config) -> io::Result<()> {
     // setup proxies
     for protocol in config.proxies.iter() {
         match protocol {
-            ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
+            ProxyConfig::Shadowsocks {
+                name: _,
+                address: _,
+                cipher: _,
+                password: _,
+                udp: _,
+            } => {
                 task::spawn(async move {});
             }
-            ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
+            ProxyConfig::VMESS {
+                name: _,
+                address: _,
+                uuid: _,
+                alter_id: _,
+                cipher: _,
+                tls: _,
+            } => {
                 task::spawn(async move {});
             }
-            ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
+            ProxyConfig::Socks5 {
+                name: _,
+                address: _,
+                username: _,
+                password: _,
+                tls: _,
+                skip_cert_verify: _,
+            } => {
                 // build protocol
 
                 // run protocol
                 task::spawn(async move {});
             }
-            ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
+            ProxyConfig::HTTP {
+                name: _,
+                address: _,
+                username: _,
+                password: _,
+                tls: _,
+                skip_cert_verify: _,
+            } => {
                 task::spawn(async move {});
             }
             ProxyConfig::Direct { name } => {
-                proxies.insert(name.to_owned(), Arc::new(Box::new(outbound::Direct::new(name))));
+                proxies.insert(
+                    name.to_owned(),
+                    Arc::new(Box::new(outbound::Direct::new(name))),
+                );
             }
         };
     }
 
     // setup rules
-    let modes = build_modes(&config)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
+    let modes =
+        build_modes(&config).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
 
     let mut vf = Vec::new();
     // setup inbounds
     for inbound in config.inbounds.iter() {
         match inbound {
-            InboundConfig::HTTP { name: _, listen, authentication: _ } => {
-                match listen {
-                    Address::SocketAddr(addr) => {
-                        for addr in addr.to_socket_addrs().await? {
-                            let fut = single_run_http(addr, modes.clone(), proxies.clone());
-                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
-                        }
-                    }
-                    Address::DomainName(ref domain) => {
-                        for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
-                            let fut = single_run_http(addr, modes.clone(), proxies.clone());
-                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
-                        }
+            InboundConfig::HTTP {
+                name: _,
+                listen,
+                authentication: _,
+            } => match listen {
+                Address::SocketAddr(addr) => {
+                    for addr in addr.to_socket_addrs().await? {
+                        let fut = single_run_http(addr, modes.clone(), proxies.clone());
+                        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
                     }
                 }
-            }
-            InboundConfig::Socks5 { name: _, listen, authentication: _ } => {
-                match listen {
-                    Address::SocketAddr(addr) => {
-                        for addr in addr.to_socket_addrs().await? {
-                            let fut = single_run_socks(addr, modes.clone(), proxies.clone());
-                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
-                        }
-                    }
-                    Address::DomainName(ref domain) => {
-                        for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
-                            let fut = single_run_socks(addr, modes.clone(), proxies.clone());
-                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
-                        }
+                Address::DomainName(ref domain) => {
+                    for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
+                        let fut = single_run_http(addr, modes.clone(), proxies.clone());
+                        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
                     }
                 }
-            }
-            InboundConfig::Redir { name: _, listen, authentication: _ } => {
-                match listen {
-                    Address::SocketAddr(addr) => {
-                        for addr in addr.to_socket_addrs().await? {
-                            let fut = single_run_redir(addr);
-                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
-                        }
-                    }
-                    Address::DomainName(ref domain) => {
-                        for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
-                            let fut = single_run_redir(addr);
-                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
-                        }
+            },
+            InboundConfig::Socks5 {
+                name: _,
+                listen,
+                authentication: _,
+            } => match listen {
+                Address::SocketAddr(addr) => {
+                    for addr in addr.to_socket_addrs().await? {
+                        let fut = single_run_socks(addr, modes.clone(), proxies.clone());
+                        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
                     }
                 }
-            }
+                Address::DomainName(ref domain) => {
+                    for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
+                        let fut = single_run_socks(addr, modes.clone(), proxies.clone());
+                        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                    }
+                }
+            },
+            InboundConfig::Redir {
+                name: _,
+                listen,
+                authentication: _,
+            } => match listen {
+                Address::SocketAddr(addr) => {
+                    for addr in addr.to_socket_addrs().await? {
+                        let fut = single_run_redir(addr);
+                        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                    }
+                }
+                Address::DomainName(ref domain) => {
+                    for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
+                        let fut = single_run_redir(addr);
+                        vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                    }
+                }
+            },
             InboundConfig::TUN { name: _ } => {
                 let fut = single_run_tun();
                 vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
@@ -244,5 +286,8 @@ pub async fn run(config: Config) -> io::Result<()> {
 
     let (res, ..) = select_all(vf.into_iter()).await;
     error!("One of inbound exited unexpectedly, result: {:?}", res);
-    Err(io::Error::new(io::ErrorKind::Other, "server exited unexpectedly"))
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        "server exited unexpectedly",
+    ))
 }

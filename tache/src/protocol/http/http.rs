@@ -1,19 +1,15 @@
-use std::collections::HashMap;
-use std::error::Error;
 use std::future::Future;
-use std::mem;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{fmt, io};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use std::pin::Pin;
+
+use std::io;
+use std::task::{Context, Poll};
+
 use futures::ready;
 use futures::StreamExt;
 use http::{header::HeaderValue, Request, Response, Uri};
-use log::info;
 
-use async_std::io::{BufRead, BufReader, Read, Write};
+use async_std::io::BufRead;
 
 /// Future for the [`read_until`](crate::io::AsyncBufReadExt::read_until) method.
 #[derive(Debug)]
@@ -71,7 +67,7 @@ impl<R: BufRead + ?Sized + Unpin> Future for ReadHttpRequest<'_, R> {
             let mut ret = Request::builder();
             ret.version(http::Version::HTTP_11);
             ret.method(r.method.unwrap());
-            for (i, header) in r.headers.iter().enumerate() {
+            for (_i, header) in r.headers.iter().enumerate() {
                 let k = header.name.as_bytes();
                 let v = header.value;
                 ret.header(k, v);

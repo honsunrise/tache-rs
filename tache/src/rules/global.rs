@@ -1,4 +1,3 @@
-use crate::outbound;
 use crate::rules::ConnectionMeta;
 
 use super::Rule;
@@ -6,7 +5,7 @@ use super::Rule;
 pub struct Global {}
 
 impl Rule for Global {
-    fn run(&self, cm: &ConnectionMeta) -> Option<&str> {
+    fn run(&self, _cm: &ConnectionMeta) -> Option<&str> {
         Some("DIRECT")
     }
 }

@@ -30,20 +30,19 @@ pub trait Rule {
 
 pub type MODE = Vec<Box<dyn Rule + Send + Sync>>;
 
-pub fn build_modes(config: &Config) -> Result<HashMap<String, Arc<MODE>>, Box<dyn Error>> {
+pub fn build_modes(_config: &Config) -> Result<HashMap<String, Arc<MODE>>, Box<dyn Error>> {
     let mut result: HashMap<String, Arc<MODE>> = HashMap::new();
     // build buildin mode
     result.insert("GLOBAL".to_owned(), Arc::new(vec![Box::new(Global {})]));
     result.insert("DIRECT".to_owned(), Arc::new(vec![Box::new(Direct {})]));
     // build rule mode
-    let mut rules = vec![];
+    let rules = vec![];
     result.insert("RULE".to_owned(), Arc::new(rules));
 
     Ok(result)
 }
 
-pub async fn lookup(mode: Arc<MODE>, cm: &ConnectionMeta)
-                    -> Result<String, Box<dyn Error>> {
+pub async fn lookup(mode: Arc<MODE>, cm: &ConnectionMeta) -> Result<String, Box<dyn Error>> {
     for rule in mode.iter() {
         if let Some(outbound) = rule.run(cm) {
             return Ok(outbound.to_owned());

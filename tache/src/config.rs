@@ -14,17 +14,10 @@ use std::{
     time::Duration,
 };
 
-use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
-use bytes::Bytes;
-use log::{error, trace};
-use serde::{
-    de::{self, Deserialize, Deserializer, Visitor},
-    ser::{self, Serialize, Serializer},
-    *,
-};
-use serde_urlencoded;
+use log::error;
+use serde::*;
+
 use trust_dns_resolver::config::{NameServerConfigGroup, ResolverConfig};
-use url::{self, Url};
 
 use crate::utils::Address;
 

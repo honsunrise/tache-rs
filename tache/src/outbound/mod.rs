@@ -1,7 +1,7 @@
 use std::io;
 
+use async_std::net::{SocketAddr, TcpStream, UdpSocket};
 use async_trait::async_trait;
-use async_std::net::{TcpStream, UdpSocket, SocketAddr};
 pub use direct::Direct;
 
 mod direct;

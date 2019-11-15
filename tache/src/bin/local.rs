@@ -7,13 +7,10 @@
 use std::{io::Result as IoResult, process};
 
 use clap::{App, Arg};
-use futures::{
-    future::{select, Either},
-    Future,
-};
+
 use log::{debug, error, info};
 
-use tache::{run, Config, Mode};
+use tache::{run, Config};
 
 mod logging;
 use async_std::task;
@@ -41,7 +38,7 @@ fn main() {
 
     logging::init(true, debug_level, "tachelocal");
 
-    let mut config = match matches.value_of("CONFIG") {
+    let config = match matches.value_of("CONFIG") {
         Some(config_path) => match Config::load_from_file(config_path) {
             Ok(cfg) => cfg,
             Err(err) => {
@@ -66,7 +63,6 @@ fn main() {
 }
 
 fn launch_server(config: Config) -> IoResult<()> {
-    use futures_util::stream::StreamExt;
     task::block_on(Box::pin(run(config)));
     panic!("Server exited unexpectedly");
 }

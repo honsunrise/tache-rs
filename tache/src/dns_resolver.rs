@@ -46,7 +46,7 @@ pub fn create_resolver(dns: Option<ResolverConfig>) -> io::Result<Resolver> {
 async fn inner_resolve(
     context: SharedContext,
     addr: &str,
-    port: u16
+    port: u16,
 ) -> io::Result<Vec<SocketAddr>> {
     // let owned_addr = addr.to_owned();
     match context.dns_resolver().lookup_ip(addr) {
@@ -79,10 +79,6 @@ async fn inner_resolve(
 }
 
 /// Resolve address to IP
-pub async fn resolve(
-    context: SharedContext,
-    addr: &str,
-    port: u16,
-) -> io::Result<Vec<SocketAddr>> {
+pub async fn resolve(context: SharedContext, addr: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     inner_resolve(context, addr, port).await
 }

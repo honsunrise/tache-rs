@@ -1,8 +1,5 @@
+use async_std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::io;
-use async_std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, TcpStream, UdpSocket};
-use std::time::Duration;
-
-use futures::Future;
 
 use async_trait::async_trait;
 use net2::TcpStreamExt;
@@ -33,14 +30,14 @@ impl Outbound for Direct {
 
     async fn dial(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         let stream = TcpStream::connect(addr).await?;
-//        stream.set_keepalive(Some(Duration::from_secs(30)))?;
+        //        stream.set_keepalive(Some(Duration::from_secs(30)))?;
         stream.set_nodelay(true)?;
         Ok(stream)
     }
 
     async fn bind(&self, addr: SocketAddr) -> io::Result<UdpSocket> {
         let local_addr = SocketAddr::new(IpAddr::from(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut remote_udp = UdpSocket::bind(&local_addr).await?;
+        let remote_udp = UdpSocket::bind(&local_addr).await?;
         remote_udp.connect(addr).await?;
         Ok(remote_udp)
     }
