@@ -1,10 +1,13 @@
-use async_trait::async_trait;
-use crate::outbound::Outbound;
-use futures::Future;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use async_std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, TcpStream, UdpSocket};
 use std::time::Duration;
-use tokio::net::{TcpStream, UdpSocket};
+
+use futures::Future;
+
+use async_trait::async_trait;
+use net2::TcpStreamExt;
+
+use crate::outbound::Outbound;
 
 pub struct Direct {
     name: String,
@@ -29,8 +32,8 @@ impl Outbound for Direct {
     }
 
     async fn dial(&self, addr: SocketAddr) -> io::Result<TcpStream> {
-        let mut stream = TcpStream::connect(addr).await?;
-        stream.set_keepalive(Some(Duration::from_secs(30)))?;
+        let stream = TcpStream::connect(addr).await?;
+//        stream.set_keepalive(Some(Duration::from_secs(30)))?;
         stream.set_nodelay(true)?;
         Ok(stream)
     }

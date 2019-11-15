@@ -1,33 +1,34 @@
-use log::{debug, error, info};
-use bytes::BytesMut;
-use futures::future::{select_all, BoxFuture, select, Either};
-use http::{header::HeaderValue, Request, Response, StatusCode};
-use serde::Serialize;
-use std::{env, error::Error, fmt::{self, Display}, io};
+use std::{env, error::Error, fmt::{self, Display}};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tokio::{
+
+use async_std::{
+    io::{self, BufReader},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     prelude::*,
-    codec::{Decoder, Encoder, Framed},
-    net::{TcpListener, TcpStream},
+    future,
+    task,
 };
+use bytes::BytesMut;
+use futures::future::{BoxFuture, Either, select, select_all};
+use http::{header::HeaderValue, Request, Response, StatusCode};
+use log::{debug, error, info};
+use serde::Serialize;
+use trust_dns_resolver::proto::error::ProtoErrorKind::NoError;
 
 use crate::{
     config::{Config, InboundConfig},
     context::{Context, SharedContext},
 };
-
-use crate::outbound::{self, Outbound};
-use std::net::{ToSocketAddrs, SocketAddr};
 use crate::config::ProxyConfig;
+use crate::outbound::{self, Outbound};
 use crate::protocol;
 use crate::rules;
-use tokio::io::BufReader;
-use crate::rules::{lookup, build_modes};
-use trust_dns_resolver::proto::error::ProtoErrorKind::NoError;
+use crate::rules::{build_modes, lookup};
+use crate::utils::Address;
 
-fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
-                            -> Result<rules::ConnectionMeta, Box<dyn Error>> {
+async fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
+                                  -> Result<rules::ConnectionMeta, Box<dyn Error>> {
     let host = match request.uri().host() {
         Some(host) => host,
         None => {
@@ -35,7 +36,7 @@ fn build_connection_meta<T>(stream: &TcpStream, request: &Request<T>)
         }
     };
 
-    let dst_addr = match host.to_socket_addrs() {
+    let dst_addr = match host.to_socket_addrs().await {
         Ok(mut addrs) => addrs.next(),
         Err(e) => None
     };
@@ -58,16 +59,17 @@ async fn single_run_http(listen_address: SocketAddr,
                          proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>)
                          -> Result<(), Box<dyn Error>> {
     let modes = Arc::new(modes);
-    let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
+    let listen = TcpListener::bind(&listen_address).await?;
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(mut inbound)) = incoming.next().await {
+    while let Some(Ok(inbound)) = listen.incoming().next().await {
         let modes = modes.clone();
         let proxies = proxies.clone();
-        tokio::spawn(async move {
+        task::spawn(async move {
             //let mut transport = Framed::new(inbound, protocol::Http);
-            let mut inbound = BufReader::new(inbound);
-            let result = protocol::read_http(&mut inbound).await;
+            let mut reader = BufReader::new(inbound);
+            let result = protocol::read_http(&mut reader).await;
+            let inbound = reader.get_ref();
 
             let request = match result {
                 Ok(r) => r,
@@ -77,7 +79,7 @@ async fn single_run_http(listen_address: SocketAddr,
                 }
             };
 
-            let connection_meta = match build_connection_meta(inbound.get_ref(), &request) {
+            let connection_meta = match build_connection_meta(inbound, &request).await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("failed to process request {}", e);
@@ -104,7 +106,7 @@ async fn single_run_http(listen_address: SocketAddr,
                     return;
                 }
             };
-            let mut outbound = match outbound.dial(connection_meta.dst_addr.unwrap()).await {
+            let outbound = match outbound.dial(connection_meta.dst_addr.unwrap()).await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("failed to dial to dst address {}", e);
@@ -112,32 +114,38 @@ async fn single_run_http(listen_address: SocketAddr,
                 }
             };
 
-            let (mut lr, mut lw) = inbound.get_mut().split();
-            let (mut rr, mut rw) = outbound.split();
+            let (l_reader, l_writer) = &mut (inbound, inbound);
+            let (r_reader, r_writer) = &mut (&outbound, &outbound);
 
-            match select(lr.copy(&mut rw), rr.copy(&mut lw)).await {
-                Either::Left(r) | Either::Right(r) => {
-
-                },
+            match select(Box::pin(io::copy(l_reader, r_writer)),
+                         Box::pin(io::copy(r_reader, l_writer))).await {
+                Either::Left(r) | Either::Right(r) => {}
             };
         });
     }
     Ok(())
 }
 
-async fn single_run_socks(listen_address: SocketAddr) -> Result<(), Box<dyn Error>> {
-    let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
+async fn single_run_socks(listen_address: SocketAddr,
+                          modes: HashMap<String, Arc<rules::MODE>>,
+                          proxies: HashMap<String, Arc<Box<dyn Outbound + Send + Sync>>>)
+                          -> Result<(), Box<dyn Error>> {
+    let listen = TcpListener::bind(&listen_address).await?;
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = incoming.next().await {}
+    while let Some(Ok(inbound)) = listen.incoming().next().await {
+        let modes = modes.clone();
+        let proxies = proxies.clone();
+        task::spawn(async move {});
+    }
     Ok(())
 }
 
 async fn single_run_redir(listen_address: SocketAddr) -> Result<(), Box<dyn Error>> {
-    let mut incoming = TcpListener::bind(&listen_address).await?.incoming();
+    let listen = TcpListener::bind(&listen_address).await?;
     println!("Listening on: {}", &listen_address);
 
-    while let Some(Ok(inbound)) = incoming.next().await {}
+    while let Some(Ok(inbound)) = listen.incoming().next().await {}
     Ok(())
 }
 
@@ -151,19 +159,19 @@ pub async fn run(config: Config) -> io::Result<()> {
     for protocol in config.proxies.iter() {
         match protocol {
             ProxyConfig::Shadowsocks { name, address, cipher, password, udp } => {
-                tokio::spawn(async move {});
+                task::spawn(async move {});
             }
             ProxyConfig::VMESS { name, address, uuid, alter_id, cipher, tls } => {
-                tokio::spawn(async move {});
+                task::spawn(async move {});
             }
             ProxyConfig::Socks5 { name, address, username, password, tls, skip_cert_verify } => {
                 // build protocol
 
                 // run protocol
-                tokio::spawn(async move {});
+                task::spawn(async move {});
             }
             ProxyConfig::HTTP { name, address, username, password, tls, skip_cert_verify } => {
-                tokio::spawn(async move {});
+                task::spawn(async move {});
             }
             ProxyConfig::Direct { name } => {
                 proxies.insert(name.to_owned(), Arc::new(Box::new(outbound::Direct::new(name))));
@@ -180,21 +188,51 @@ pub async fn run(config: Config) -> io::Result<()> {
     for inbound in config.inbounds.iter() {
         match inbound {
             InboundConfig::HTTP { name: _, listen, authentication: _ } => {
-                for addr in listen.to_socket_addrs()? {
-                    let fut = single_run_http(addr, modes.clone(), proxies.clone());
-                    vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                match listen {
+                    Address::SocketAddr(addr) => {
+                        for addr in addr.to_socket_addrs().await? {
+                            let fut = single_run_http(addr, modes.clone(), proxies.clone());
+                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                        }
+                    }
+                    Address::DomainName(ref domain) => {
+                        for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
+                            let fut = single_run_http(addr, modes.clone(), proxies.clone());
+                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                        }
+                    }
                 }
             }
             InboundConfig::Socks5 { name: _, listen, authentication: _ } => {
-                for addr in listen.to_socket_addrs()? {
-                    let fut = single_run_socks(addr);
-                    vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                match listen {
+                    Address::SocketAddr(addr) => {
+                        for addr in addr.to_socket_addrs().await? {
+                            let fut = single_run_socks(addr, modes.clone(), proxies.clone());
+                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                        }
+                    }
+                    Address::DomainName(ref domain) => {
+                        for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
+                            let fut = single_run_socks(addr, modes.clone(), proxies.clone());
+                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                        }
+                    }
                 }
             }
             InboundConfig::Redir { name: _, listen, authentication: _ } => {
-                for addr in listen.to_socket_addrs()? {
-                    let fut = single_run_redir(addr);
-                    vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                match listen {
+                    Address::SocketAddr(addr) => {
+                        for addr in addr.to_socket_addrs().await? {
+                            let fut = single_run_redir(addr);
+                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                        }
+                    }
+                    Address::DomainName(ref domain) => {
+                        for addr in (domain.0.as_ref(), domain.1).to_socket_addrs().await? {
+                            let fut = single_run_redir(addr);
+                            vf.push(Box::pin(fut) as BoxFuture<Result<(), Box<dyn Error>>>);
+                        }
+                    }
                 }
             }
             InboundConfig::TUN { name: _ } => {

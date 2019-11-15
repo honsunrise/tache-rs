@@ -4,21 +4,19 @@
 //! or you could specify a configuration file. The format of configuration file is defined
 //! in mod `config`.
 
-use std::{io::Result as IoResult, net::SocketAddr, process};
+use std::{io::Result as IoResult, process};
 
 use clap::{App, Arg};
 use futures::{
     future::{select, Either},
-    prelude::*,
     Future,
 };
 use log::{debug, error, info};
-use tokio::net::signal;
-use tokio::runtime::Runtime;
 
 use tache::{run, Config, Mode};
 
 mod logging;
+use async_std::task;
 
 fn main() {
     let matches = App::new("tache")
@@ -68,21 +66,7 @@ fn main() {
 }
 
 fn launch_server(config: Config) -> IoResult<()> {
-    let runtime = Runtime::new().expect("Creating runtime");
-
-    let abort_signal = signal::ctrl_c()?;
-
-    let result = runtime.block_on(select(
-        Box::pin(run(config)),
-        Box::pin(abort_signal.into_future()),
-    ));
-
-    runtime.shutdown_now();
-
-    match result {
-        // Server future resolved without an error. This should never happen.
-        Either::Left(_) => panic!("Server exited unexpectedly"),
-        // The abort signal future resolved. Means we should just exit.
-        Either::Right(..) => Ok(()),
-    }
+    use futures_util::stream::StreamExt;
+    task::block_on(Box::pin(run(config)));
+    panic!("Server exited unexpectedly");
 }

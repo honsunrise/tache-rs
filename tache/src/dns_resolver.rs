@@ -5,7 +5,6 @@ use std::{
     net::SocketAddr,
 };
 
-use tokio::{self, future::Future};
 use trust_dns_resolver::{config::ResolverConfig, Resolver};
 
 use crate::context::SharedContext;

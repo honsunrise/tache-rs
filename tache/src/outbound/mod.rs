@@ -1,13 +1,12 @@
-use async_trait::async_trait;
 use std::io;
-use std::net::SocketAddr;
-use tokio::net::{TcpStream, UdpSocket};
+
+use async_trait::async_trait;
+use async_std::net::{TcpStream, UdpSocket, SocketAddr};
+pub use direct::Direct;
 
 mod direct;
 mod fallback;
 mod socks5;
-
-pub use direct::Direct;
 
 #[async_trait]
 pub trait Outbound {

@@ -6,8 +6,7 @@ use std::{
     fmt::Write,
     fmt::{self, Debug, Display, Formatter},
     fs::OpenOptions,
-    io::{self, Read},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs},
+    io,
     option::Option,
     path::Path,
     str::FromStr,
@@ -16,6 +15,9 @@ use std::{
     vec,
 };
 
+use async_std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs,
+};
 use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use json5;
@@ -165,33 +167,24 @@ impl Display for Address {
     }
 }
 
-impl ToSocketAddrs for Address {
-    type Iter = Iter;
-
-    fn to_socket_addrs(&self) -> io::Result<Self::Iter> {
-        let iter = match *self {
-            Address::SocketAddr(addr) => Iter::SocketAddr(Some(addr)),
-            Address::DomainName(ref domain) => {
-                let it = (domain.0.as_ref(), domain.1).to_socket_addrs()?;
-                Iter::DomainName(it)
-            }
-        };
-        Ok(iter)
-    }
-}
-
-pub enum Iter {
-    SocketAddr(Option<SocketAddr>),
-    DomainName(vec::IntoIter<SocketAddr>),
-}
-
-impl Iterator for Iter {
-    type Item = SocketAddr;
-
-    fn next(&mut self) -> Option<SocketAddr> {
-        match self {
-            Iter::SocketAddr(ref mut addr) => addr.take(),
-            Iter::DomainName(ref mut it) => it.next(),
-        }
-    }
-}
+//macro_rules! ret {
+//    (impl Future<Output = $out:ty>, $fut:ty) => {
+//        $fut
+//    };
+//}
+//
+//impl ToSocketAddrs for Address {
+//    type Iter = std::option::IntoIter<SocketAddr>;
+//
+//    fn to_socket_addrs(
+//        &self,
+//    ) -> ret!(
+//        impl Future<Output = Self::Iter>,
+//        ToSocketAddrsFuture<Self::Iter>
+//    ) {
+//        match *self {
+//            Address::SocketAddr(addr) => addr.to_socket_addrs(),
+//            Address::DomainName(ref domain) => (domain.0.as_ref(), domain.1).to_socket_addrs(),
+//        }
+//    }
+//}

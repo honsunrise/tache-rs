@@ -1,9 +1,10 @@
-use env_logger::{fmt::Formatter, Builder};
-use log::{LevelFilter, Record};
 use std::{
     env,
     io::{self, Write},
 };
+
+use env_logger::{fmt::Formatter, Builder};
+use log::{LevelFilter, Record};
 
 pub fn init(without_time: bool, debug_level: u64, bin_name: &str) {
     let mut log_builder = Builder::new();
@@ -15,23 +16,27 @@ pub fn init(without_time: bool, debug_level: u64, bin_name: &str) {
             log_builder.format(move |fmt, r| log_time(fmt, without_time, r));
         }
         1 => {
-            let log_builder = log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
+            let log_builder =
+                log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
             log_builder.filter(Some(bin_name), LevelFilter::Debug);
         }
         2 => {
-            let log_builder = log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
+            let log_builder =
+                log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
             log_builder
                 .filter(Some(bin_name), LevelFilter::Debug)
                 .filter(Some("shadowsocks"), LevelFilter::Debug);
         }
         3 => {
-            let log_builder = log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
+            let log_builder =
+                log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
             log_builder
                 .filter(Some(bin_name), LevelFilter::Trace)
                 .filter(Some("shadowsocks"), LevelFilter::Trace);
         }
         _ => {
-            let log_builder = log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
+            let log_builder =
+                log_builder.format(move |fmt, r| log_time_module(fmt, without_time, r));
             log_builder.filter(None, LevelFilter::Trace);
         }
     }

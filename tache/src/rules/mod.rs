@@ -1,9 +1,11 @@
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::error::Error;
-use crate::Config;
-use global::Global;
+use std::sync::Arc;
+
 use direct::Direct;
+use global::Global;
+
+use crate::Config;
 
 pub mod direct;
 pub mod global;

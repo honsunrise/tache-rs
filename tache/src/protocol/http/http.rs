@@ -1,19 +1,19 @@
-use bytes::{BufMut, Bytes, BytesMut};
-use futures::StreamExt;
-use http::{header::HeaderValue, Request, Response, Uri};
-use log::info;
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::Arc;
-use std::{fmt, io};
-use tokio::codec::{Decoder, Encoder};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
-
-use futures::ready;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::{fmt, io};
+
+use bytes::{BufMut, Bytes, BytesMut};
+use futures::ready;
+use futures::StreamExt;
+use http::{header::HeaderValue, Request, Response, Uri};
+use log::info;
+
+use async_std::io::{BufRead, BufReader, Read, Write};
 
 /// Future for the [`read_until`](crate::io::AsyncBufReadExt::read_until) method.
 #[derive(Debug)]
@@ -26,12 +26,12 @@ impl<R: ?Sized + Unpin> Unpin for ReadHttpRequest<'_, R> {}
 
 pub fn read_http<R>(reader: &mut R) -> ReadHttpRequest<R>
 where
-    R: AsyncBufRead + ?Sized + Unpin,
+    R: BufRead + ?Sized + Unpin,
 {
     ReadHttpRequest { reader }
 }
 
-impl<R: AsyncBufRead + ?Sized + Unpin> Future for ReadHttpRequest<'_, R> {
+impl<R: BufRead + ?Sized + Unpin> Future for ReadHttpRequest<'_, R> {
     type Output = io::Result<Request<()>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -93,118 +93,6 @@ impl<R: AsyncBufRead + ?Sized + Unpin> Future for ReadHttpRequest<'_, R> {
             reader.as_mut().consume(amt + 1);
             return Poll::Ready(Ok(result));
         }
-    }
-}
-
-pub struct Http;
-
-/// Implementation of encoding an HTTP response into a `BytesMut`, basically
-/// just writing out an HTTP/1.1 response.
-impl Encoder for Http {
-    type Item = Response<String>;
-    type Error = io::Error;
-
-    fn encode(&mut self, item: Response<String>, dst: &mut BytesMut) -> io::Result<()> {
-        use std::fmt::Write;
-
-        write!(
-            BytesWrite(dst),
-            "\
-             HTTP/1.1 {}\r\n\
-             Server: Example\r\n\
-             Content-Length: {}\r\n\
-             Date: {}\r\n\
-             ",
-            item.status(),
-            item.body().len(),
-            date::now()
-        )
-        .unwrap();
-
-        for (k, v) in item.headers() {
-            dst.extend_from_slice(k.as_str().as_bytes());
-            dst.extend_from_slice(b": ");
-            dst.extend_from_slice(v.as_bytes());
-            dst.extend_from_slice(b"\r\n");
-        }
-
-        dst.extend_from_slice(b"\r\n");
-        dst.extend_from_slice(item.body().as_bytes());
-
-        return Ok(());
-
-        // Right now `write!` on `Vec<u8>` goes through io::Write and is not
-        // super speedy, so inline a less-crufty implementation here which
-        // doesn't go through io::Error.
-        struct BytesWrite<'a>(&'a mut BytesMut);
-
-        impl fmt::Write for BytesWrite<'_> {
-            fn write_str(&mut self, s: &str) -> fmt::Result {
-                self.0.extend_from_slice(s.as_bytes());
-                Ok(())
-            }
-
-            fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
-                fmt::write(self, args)
-            }
-        }
-    }
-}
-
-/// Implementation of decoding an HTTP request from the bytes we've read so far.
-/// This leverages the `httparse` crate to do the actual parsing and then we use
-/// that information to construct an instance of a `http::Request` object,
-/// trying to avoid allocations where possible.
-impl Decoder for Http {
-    type Item = Request<Bytes>;
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<Request<Bytes>>> {
-        let mut ret = Request::builder();
-        let mut parsed_headers: Vec<httparse::Header> = Vec::with_capacity(64);
-        let mut r = httparse::Request::new(&mut parsed_headers);
-        let status = match r.parse(src) {
-            Err(e) => {
-                if e == httparse::Error::TooManyHeaders {}
-                let msg = format!("failed to parse http request: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, msg));
-            }
-            Ok(status) => status,
-        };
-
-        let amt = match status {
-            httparse::Status::Complete(amt) => amt,
-            httparse::Status::Partial => return Ok(None),
-        };
-
-        if r.version.unwrap() != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "only HTTP/1.1 accepted",
-            ));
-        }
-
-        ret.version(http::Version::HTTP_11);
-        ret.method(r.method.unwrap());
-        for (i, header) in r.headers.iter().enumerate() {
-            let k = header.name.as_bytes();
-            let v = header.value;
-            ret.header(k, v);
-        }
-        let uri = Uri::builder()
-            .scheme("http")
-            .authority(ret.headers_ref().unwrap().get("host").unwrap().as_bytes())
-            .path_and_query(r.path.unwrap())
-            .build()
-            .unwrap();
-        ret.uri(uri);
-
-        let data = src.split_off(amt).freeze();
-        let req = ret
-            .body(data)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        src.clear();
-        Ok(Some(req))
     }
 }
 
